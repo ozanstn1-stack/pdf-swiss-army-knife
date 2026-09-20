@@ -1,0 +1,264 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type {
+  Annotation,
+  AppInfo,
+  CompressEstimate,
+  CompressOptions,
+  CropItem,
+  EngineStatus,
+  ImageItem,
+  ImageToPdfOptions,
+  NumberingOptions,
+  OcrLanguage,
+  OcrOptions,
+  OpResult,
+  OutputSpec,
+  PagePlanItem,
+  PdfInfo,
+  ProgressPayload,
+  ProtectOptions,
+  RecentEntry,
+  Settings,
+  SplitMode,
+  Thumbnail,
+  WatermarkOptions,
+} from "./types";
+
+/** Normalizes any thrown value into a friendly {code, message} pair. */
+export function toAppError(error: unknown): { code: string; message: string } {
+  if (typeof error === "string") {
+    return { code: "internal", message: error };
+  }
+  if (error && typeof error === "object" && "code" in error && "message" in error) {
+    const e = error as { code: string; message: string };
+    return { code: String(e.code), message: String(e.message) };
+  }
+  if (error instanceof Error) {
+    return { code: "internal", message: error.message };
+  }
+  return { code: "internal", message: String(error) };
+}
+
+// ---------------------------------------------------------------------------
+// System
+// ---------------------------------------------------------------------------
+
+export const appInfo = () => invoke<AppInfo>("app_info");
+export const engineStatus = () => invoke<EngineStatus>("engine_status");
+export const ocrLanguages = () => invoke<OcrLanguage[]>("ocr_languages");
+export const cancelJob = (jobId: string) => invoke<void>("cancel_job", { jobId });
+
+export const onProgress = (handler: (payload: ProgressPayload) => void): Promise<UnlistenFn> =>
+  listen<ProgressPayload>("job:progress", (event) => handler(event.payload));
+
+// ---------------------------------------------------------------------------
+// Inspection
+// ---------------------------------------------------------------------------
+
+export const pdfInfo = (path: string, password?: string) =>
+  invoke<PdfInfo>("pdf_info", { path, password: password || null });
+
+export const pageThumbnail = (path: string, page: number, maxWidth = 200, password?: string) =>
+  invoke<Thumbnail>("page_thumbnail", { path, page, maxWidth, password: password || null });
+
+export const pagePreview = (path: string, page: number, maxWidth = 1100, password?: string) =>
+  invoke<Thumbnail>("page_preview", { path, page, maxWidth, password: password || null });
+
+export const checkPassword = (path: string, password: string) =>
+  invoke<boolean>("check_password", { path, password });
+
+export const outputExists = (path: string) => invoke<boolean>("output_exists", { path });
+
+export const suggestOutput = (input: string, suffix: string) =>
+  invoke<string>("suggest_output", { input, suffix });
+
+export const fileSizes = (paths: string[]) => invoke<(number | null)[]>("file_sizes", { paths });
+
+export const logFrontend = (level: string, message: string) =>
+  invoke<void>("log_frontend", { level, message }).catch(() => undefined);
+
+export const devLaunchContext = () =>
+  invoke<{ startScreen: string | null; files: string[] | null; autoRun: boolean }>("dev_launch_context");
+
+// ---------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------
+
+export const mergePdfs = (
+  inputs: string[],
+  output: OutputSpec,
+  preserveMetadata: boolean,
+  jobId: string,
+) => invoke<OpResult>("merge_pdfs", { request: { inputs, output, preserveMetadata, jobId } });
+
+interface PagesPayload {
+  input: string;
+  pages?: number[];
+  selection?: string;
+  degrees?: number;
+  output: OutputSpec;
+  password?: string;
+  jobId: string;
+}
+
+export const extractPages = (payload: PagesPayload) =>
+  invoke<OpResult>("extract_pages", { request: payload });
+
+export const deletePages = (payload: PagesPayload) =>
+  invoke<OpResult>("delete_pages", { request: payload });
+
+export const rotatePages = (payload: PagesPayload) =>
+  invoke<OpResult>("rotate_pages", { request: payload });
+
+export const applyPagePlan = (
+  input: string,
+  plan: PagePlanItem[],
+  output: OutputSpec,
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("apply_page_plan", { request: { input, plan, output, password, jobId } });
+
+export const splitPdf = (
+  input: string,
+  mode: SplitMode,
+  outputDir: string,
+  overwrite: OutputSpec["overwrite"],
+  jobId: string,
+  password?: string,
+) =>
+  invoke<{ parts: { path: string; first_page: number; last_page: number }[]; outputDir: string }>(
+    "split_pdf",
+    { request: { input, mode, outputDir, overwrite, password, jobId } },
+  );
+
+export const estimateCompression = (input: string, options: CompressOptions, password?: string) =>
+  invoke<CompressEstimate>("estimate_compression", { input, options, password: password || null });
+
+export const compressPdf = (
+  input: string,
+  output: OutputSpec,
+  options: CompressOptions,
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("compress_pdf", { request: { input, output, options, password, jobId } });
+
+export const ocrPdf = (
+  input: string,
+  output: OutputSpec,
+  options: OcrOptions,
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("ocr_pdf", { request: { input, output, options, password, jobId } });
+
+export const protectPdf = (
+  input: string,
+  output: OutputSpec,
+  options: ProtectOptions,
+  jobId: string,
+  password?: string,
+) =>
+  invoke<OpResult>("protect_pdf", {
+    request: { input, output, ...options, password, jobId },
+  });
+
+export const unlockPdf = (input: string, output: OutputSpec, password: string, jobId: string) =>
+  invoke<OpResult>("unlock_pdf", { request: { input, output, password, jobId } });
+
+export const pdfToImages = (
+  request: {
+    input: string;
+    outputDir: string;
+    format: "jpeg" | "png";
+    dpi: number;
+    jpegQuality: number;
+    grayscale: boolean;
+    namePrefix: string;
+    pages: number[];
+    overwrite?: OutputSpec["overwrite"];
+    password?: string;
+    jobId: string;
+  },
+) =>
+  invoke<{ files: { path: string; page: number; width: number; height: number; bytes: number }[]; totalBytes: number; dpi: number; format: string }>(
+    "pdf_to_images",
+    { request },
+  );
+
+export const imagesToPdf = (
+  items: ImageItem[],
+  output: OutputSpec,
+  options: ImageToPdfOptions,
+  jobId: string,
+) => invoke<OpResult>("images_to_pdf", { request: { items, output, options, jobId } });
+
+export const resizePages = (
+  input: string,
+  output: OutputSpec,
+  options: { page_size: string; custom_width_pt: number; custom_height_pt: number; orientation: string; mode: string; pages: number[] },
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("resize_pages", { request: { input, output, options, password, jobId } });
+
+export const cropPages = (
+  input: string,
+  output: OutputSpec,
+  crops: CropItem[],
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("crop_pages", { request: { input, output, crops, password, jobId } });
+
+export const editMetadata = (
+  input: string,
+  output: OutputSpec,
+  metadata: {
+    title: string;
+    author: string;
+    subject: string;
+    keywords: string;
+    creator: string;
+    producer: string;
+    creation_date: string;
+    mod_date: string;
+  },
+  remove: boolean,
+  jobId: string,
+  password?: string,
+) =>
+  invoke<OpResult>("edit_metadata", {
+    request: { input, output, metadata, remove, password, jobId },
+  });
+
+export const addPageNumbers = (
+  input: string,
+  output: OutputSpec,
+  options: NumberingOptions,
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("add_page_numbers", { request: { input, output, options, password, jobId } });
+
+export const watermarkPdf = (
+  input: string,
+  output: OutputSpec,
+  options: WatermarkOptions,
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("watermark_pdf", { request: { input, output, options, password, jobId } });
+
+export const annotatePdf = (
+  input: string,
+  output: OutputSpec,
+  annotations: Annotation[],
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("annotate_pdf", { request: { input, output, annotations, password, jobId } });
+
+// ---------------------------------------------------------------------------
+// Settings / recent
+// ---------------------------------------------------------------------------
+
+export const loadSettings = () => invoke<Partial<Settings>>("load_settings");
+export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });
+export const loadRecent = () => invoke<RecentEntry[]>("load_recent");
+export const addRecent = (entry: RecentEntry) => invoke<void>("add_recent", { entry });
+export const clearRecent = () => invoke<void>("clear_recent");
