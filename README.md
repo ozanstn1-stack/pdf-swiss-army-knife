@@ -5,7 +5,7 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
-![Version](https://img.shields.io/badge/version-1.0.0-success)
+![Version](https://img.shields.io/badge/version-1.1.0-success)
 
 > **Privacy first:** every operation runs on your machine. There is no cloud upload, no telemetry and no analytics. Passwords are never logged or stored. See [Privacy & security](#privacy--security).
 
@@ -29,6 +29,10 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 | --- | --- |
 | ![Protect](docs/screenshots/07-protect.png) | ![Batch](docs/screenshots/09-batch.png) |
 
+| Reading mode | Reading mode search |
+| --- | --- |
+| ![Reading mode](docs/screenshots/14-reader.png) | ![Reading mode search](docs/screenshots/15-reader-search.png) |
+
 | Page tools | Settings |
 | --- | --- |
 | ![Page tools](docs/screenshots/08-pagetools.png) | ![Settings](docs/screenshots/10-settings.png) |
@@ -36,6 +40,12 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 ---
 
 ## Features
+
+### Reading mode
+- **Continuous scroll** through the whole document; pages render lazily at the requested zoom.
+- **Fit width / 25–400 % zoom** with `Ctrl +` / `Ctrl -` / `Ctrl+0`, plus page navigation (jump field, prev/next buttons, `Home`/`End`, `PgUp`/`PgDn`).
+- **Full-text search** over the PDF text layer using pdfium's matcher: match count and pages, context snippets, click to jump, `Ctrl+F` to focus the search box.
+- **Copy page text** to the clipboard (works for digital PDFs and OCR'd searchable PDFs) and one click to open the file in the system default reader.
 
 ### PDF tools
 - **Merge** – combine any number of PDFs in a drag-and-order list, keeping the first document's metadata.
@@ -101,7 +111,7 @@ pdf-swiss-army-knife/
 │   ├── src/                 # merge, organize, split, security, metadata, info,
 │   │                        # render (pdfium), images, compress, ocr, watermark,
 │   │                        # numbering, annotate, pagelayout, textimg, engines
-│   └── tests/               # 62 integration tests + synthetic sample generators
+│   └── tests/               # 50 integration tests + synthetic sample generators
 ├── src-tauri/               # Tauri shell: commands, job registry (progress/cancel),
 │   └── resources/engines/   # bundled pdfium.dll, qpdf.exe, tesseract (fetched, gitignored)
 ├── src/                     # React UI (screens, components, i18n, state)
@@ -158,7 +168,7 @@ npm run app:dev
 npm run test:rust          # or: cargo test --workspace
 ```
 
-The suite (62 tests: 13 unit + 49 integration) covers merge, split, extract, delete, reorder/duplicate/rotate plans, compression (lossless + raster), PDF↔image conversion, watermarking, AES-256 protect/unlock, metadata, annotations, page numbering, resize/crop, OCR (searchable PDF, text, Markdown, noisy scans, single-page documents), batch stability, the IPC wire format and a dedicated hostile-input suite (empty, corrupt, locked, oversized, wrong-password, out-of-range, cancellation).
+The suite (63 tests: 13 unit + 50 integration) covers merge, split, extract, delete, reorder/duplicate/rotate plans, compression (lossless + raster), PDF↔image conversion, watermarking, AES-256 protect/unlock, metadata, annotations, page numbering, resize/crop, OCR (searchable PDF, text, Markdown, noisy scans, single-page documents), batch stability, the IPC wire format and a dedicated hostile-input suite (empty, corrupt, locked, oversized, wrong-password, out-of-range, cancellation).
 
 ### Build & release
 
@@ -232,6 +242,7 @@ Honest list of what v1.0.0 does **not** do:
 - **No printing** from the application (export and open in your reader).
 - **Watermark "tile" uses a fixed grid**, not a user-defined spacing.
 - **Page numbering uses the standard Helvetica font**, so the label text itself is ASCII (numbers, "Page", "/").
+- **Reading mode renders pages as images**, so drag-selecting text inside a page is not possible; use the search box or "Copy page text" (both use the real text layer).
 - Only a single window/instance is supported; there is no plugin system.
 - macOS/Linux are not built yet.
 
@@ -241,6 +252,7 @@ Honest list of what v1.0.0 does **not** do:
 - [ ] OCR output optimization (JBIG2/JPEG XObject compression for scanned pages).
 - [ ] WYSIWYG editor for existing flattened annotations (real PDF annotation objects).
 - [ ] Print support with page range selection.
+- [ ] Text selection/highlighting inside reading mode (currently page-level copy).
 - [ ] Additional OCR language packs via an in-app manager.
 - [ ] macOS/Linux builds (the core is already platform-agnostic).
 - [ ] Signed builds and MSIX packaging.
