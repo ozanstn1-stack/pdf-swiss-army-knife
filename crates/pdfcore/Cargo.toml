@@ -1,0 +1,23 @@
+[package]
+name = "pdfcore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Local-first PDF processing core for PDF Swiss Army Knife"
+
+[lib]
+name = "pdfcore"
+path = "src/lib.rs"
+
+[dependencies]
+ab_glyph = "0.2.32"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff", "gif"] }
+lopdf = "0.45.0"
+pdfium-render = "0.9.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+uuid = { version = "1.26.1", features = ["v4"] }
