@@ -26,12 +26,26 @@ if ($Build) {
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 
 # ---------------------------------------------------------------- installer
-$nsis = Get-ChildItem (Join-Path $targetRelease 'bundle\nsis') -Filter '*-setup.exe' | Select-Object -First 1
+# Match the installer for *this* version explicitly: old bundle outputs stay
+# in target/release/bundle/nsis after a version bump, and picking "the first
+# file" would silently ship the previous release.
+$nsisDir = Join-Path $targetRelease 'bundle\nsis'
+$nsis = Get-ChildItem $nsisDir -Filter "*-$version-*-setup.exe" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if (-not $nsis) {
+    $nsis = Get-ChildItem $nsisDir -Filter '*-setup.exe' |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+}
 if (-not $nsis) { throw 'NSIS installer not found. Run npm run tauri build first.' }
+if ($nsis.Name -notlike "*$version*") {
+    throw "Installer $($nsis.Name) does not match version $version. Re-run npm run tauri build."
+}
 $installerName = "PDF-Swiss-Army-Knife-Setup-$version.exe"
 $installerPath = Join-Path $releaseDir $installerName
 Copy-Item $nsis.FullName $installerPath -Force
-Write-Host "installer: $installerPath ($([math]::Round((Get-Item $installerPath).Length / 1MB, 1)) MB)"
+Write-Host "installer: $installerPath ($([math]::Round((Get-Item $installerPath).Length / 1MB, 1)) MB from $($nsis.Name))"
 
 # ---------------------------------------------------------------- portable
 $portableStage = Join-Path $env:TEMP "pdfsak-portable-$version"
