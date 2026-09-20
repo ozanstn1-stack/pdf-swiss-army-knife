@@ -11,7 +11,7 @@
 - **Copy page text** to the clipboard (works for digital PDFs and for OCR'd searchable PDFs).
 - **Page navigation**: jump-to-page field, previous/next buttons, `Home`/`End`, `PgUp`/`PgDn`, current page indicator.
 - **Open in default app** button, and the reader is available from the sidebar, the Home screen and History (clicking a recent PDF opens it in the reader).
-- Keyboard shortcuts are listed at the bottom of the reader and in Settings.
+- Keyboard shortcuts are shown at the bottom of the reading view: `Ctrl+F` search, `Ctrl +` / `Ctrl -` zoom, `Ctrl+0` fit width, `PgUp`/`PgDn`, `Home`/`End`.
 
 ### Also in this release
 - English and Turkish dictionary entries for the reader, including a hint when a document has no text layer (use the OCR tool to make it searchable).
