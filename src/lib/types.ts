@@ -283,6 +283,19 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultExportFormat: "jpg",
 };
 
+export interface TextMatch {
+  page: number;
+  snippet: string;
+  index_on_page: number;
+}
+
+export interface SearchResponse {
+  matches: TextMatch[];
+  pagesWithMatches: number;
+  totalMatches: number;
+  truncated: boolean;
+}
+
 export interface SelectedFile {
   path: string;
   name: string;

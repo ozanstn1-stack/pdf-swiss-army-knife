@@ -1,5 +1,6 @@
 export type ScreenId =
   | "home"
+  | "reader"
   | "merge"
   | "organize"
   | "split"

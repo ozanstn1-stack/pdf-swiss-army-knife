@@ -76,7 +76,7 @@ export function History({ onNavigate }: { onNavigate: Navigate }) {
                         size="sm"
                         onClick={() => {
                           if (isPdf(entry.path)) {
-                            onNavigate("organize", { files: [entry.path] });
+                            onNavigate("reader", { files: [entry.path] });
                           } else {
                             void openPath(entry.path).catch(() => undefined);
                           }

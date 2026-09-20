@@ -17,6 +17,7 @@ import type {
   PagePlanItem,
   PdfInfo,
   ProgressPayload,
+  SearchResponse,
   ProtectOptions,
   RecentEntry,
   Settings,
@@ -62,8 +63,34 @@ export const pdfInfo = (path: string, password?: string) =>
 export const pageThumbnail = (path: string, page: number, maxWidth = 200, password?: string) =>
   invoke<Thumbnail>("page_thumbnail", { path, page, maxWidth, password: password || null });
 
-export const pagePreview = (path: string, page: number, maxWidth = 1100, password?: string) =>
-  invoke<Thumbnail>("page_preview", { path, page, maxWidth, password: password || null });
+export const pagePreview = (
+  path: string,
+  page: number,
+  maxWidth = 1100,
+  password?: string,
+  format: "png" | "jpeg" = "png",
+  quality = 86,
+) => invoke<Thumbnail>("page_preview", { path, page, maxWidth, password: password || null, format, quality });
+
+export const pageText = (path: string, page: number, password?: string) =>
+  invoke<string>("page_text", { path, page, password: password || null });
+
+export const searchDocument = (
+  path: string,
+  query: string,
+  matchCase: boolean,
+  maxResults: number,
+  password: string | undefined,
+  jobId: string,
+) =>
+  invoke<SearchResponse>("search_document", {
+    path,
+    query,
+    matchCase,
+    maxResults,
+    password: password ?? null,
+    jobId,
+  });
 
 export const checkPassword = (path: string, password: string) =>
   invoke<boolean>("check_password", { path, password });

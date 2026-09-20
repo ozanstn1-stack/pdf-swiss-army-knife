@@ -3,6 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
+  BookOpen,
   Combine,
   FileSearch,
   FolderClock,
@@ -25,9 +26,11 @@ import {
 } from "lucide-react";
 import { useT } from "./lib/i18n";
 import { useDev, useDrop, useJobs, useRecent, useSettings, useToasts } from "./lib/store";
+import packageJson from "../package.json";
 import { devLaunchContext } from "./lib/api";
 import type { Navigate, ScreenId } from "./lib/nav";
 import { Home as HomeScreen } from "./screens/Home";
+import { Reader } from "./screens/Reader";
 import { Merge } from "./screens/Merge";
 import { Organize } from "./screens/Organize";
 import { Split } from "./screens/Split";
@@ -103,6 +106,9 @@ export default function App() {
           files: context.files,
           autoRun: Boolean(context.autoRun),
         });
+        void import("./lib/api").then(({ logFrontend }) =>
+          logFrontend("info", `dev-context: screen=${context.startScreen} files=${(context.files ?? []).length} autoRun=${context.autoRun}`),
+        );
         if (context.startScreen) {
           navigate(context.startScreen as ScreenId, { files: context.files ?? [] });
         } else if (context.files?.length) {
@@ -198,6 +204,7 @@ export default function App() {
   const screens: Record<ScreenId, React.ReactElement> = useMemo(
     () => ({
       home: <HomeScreen onNavigate={navigate} onDropFiles={homeDrop} dragging={dragging} onFileList={setFiles} />,
+      reader: <Reader initialFiles={files} dragging={dragging} />,
       merge: <Merge initialFiles={files} dragging={dragging} />,
       organize: <Organize initialFiles={files} dragging={dragging} />,
       split: <Split initialFiles={files} dragging={dragging} />,
@@ -221,7 +228,12 @@ export default function App() {
   );
 
   const navGroups: { label?: string; items: { id: ScreenId; label: string; icon: React.ReactElement }[] }[] = [
-    { items: [{ id: "home", label: t("nav.home"), icon: <Home size={16} /> }] },
+    {
+      items: [
+        { id: "home", label: t("nav.home"), icon: <Home size={16} /> },
+        { id: "reader", label: t("nav.reader"), icon: <BookOpen size={16} /> },
+      ],
+    },
     {
       label: t("nav.pdfTools"),
       items: [
@@ -282,7 +294,7 @@ export default function App() {
           {!sidebarCompact ? (
             <div className="min-w-0">
               <p className="font-bold text-[13.5px] leading-tight truncate">{t("app.name")}</p>
-              <p className="text-[11px] muted truncate">v1.0.0 · local</p>
+              <p className="text-[11px] muted truncate">v{packageJson.version} · local</p>
             </div>
           ) : null}
         </div>

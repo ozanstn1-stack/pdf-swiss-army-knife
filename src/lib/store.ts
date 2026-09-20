@@ -118,6 +118,11 @@ export const useJobs = create<JobsState>((set, get) => ({
   },
 }));
 
+/** Progress of a single job (reading mode search). */
+export function useJobProgress(jobId: string): ProgressPayload | null {
+  return useJobs((state) => (jobId ? state.progress[jobId] ?? null : null));
+}
+
 // ---------------------------------------------------------------------------
 // Recent files (paths + timestamps only)
 // ---------------------------------------------------------------------------

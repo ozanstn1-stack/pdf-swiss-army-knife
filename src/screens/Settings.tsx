@@ -20,7 +20,7 @@ function VersionLine() {
   useEffect(() => {
     void appInfo()
       .then((info) => setVersion(`v${info.appVersion} · core ${info.coreVersion} · ${info.platform}`))
-      .catch(() => setVersion("v1.0.0"));
+      .catch(() => setVersion("v1.1.0"));
   }, []);
   return (
     <p className="text-xs muted">
