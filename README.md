@@ -158,7 +158,7 @@ npm run app:dev
 npm run test:rust          # or: cargo test --workspace
 ```
 
-The suite covers merge, split, extract, delete, reorder/duplicate/rotate plans, compression (lossless + raster), PDF↔image conversion, watermarking, AES-256 protect/unlock, metadata, annotations, page numbering, resize/crop, OCR (searchable PDF, text, Markdown, noisy scans, single-page documents), batch stability, the IPC wire format and a dedicated hostile-input suite (empty, corrupt, locked, oversized, wrong-password, out-of-range, cancellation).
+The suite (62 tests: 13 unit + 49 integration) covers merge, split, extract, delete, reorder/duplicate/rotate plans, compression (lossless + raster), PDF↔image conversion, watermarking, AES-256 protect/unlock, metadata, annotations, page numbering, resize/crop, OCR (searchable PDF, text, Markdown, noisy scans, single-page documents), batch stability, the IPC wire format and a dedicated hostile-input suite (empty, corrupt, locked, oversized, wrong-password, out-of-range, cancellation).
 
 ### Build & release
 

@@ -33,7 +33,7 @@ A modern Windows desktop toolkit for everyday PDF work. Nothing is uploaded; eve
 
 ## Validation status
 
-- 75 automated tests (`cargo test --workspace`) cover every operation, the IPC wire format, and hostile inputs (empty/corrupt/locked/oversized files, wrong passwords, cancellation, disk errors).
+- 62 automated tests (`cargo test --workspace`: 13 unit + 49 integration) cover every operation, the IPC wire format, and hostile inputs (empty/corrupt/locked/oversized files, wrong passwords, cancellation, disk errors).
 - End-to-end UI validation performed on a real Windows machine: import → organize → merge → split → rotate → compress → OCR → watermark → protect/unlock → PDF→JPG → JPG→PDF → metadata → export, plus crash scenarios.
 - Example measured result: a 300-DPI scanned invoice (1.44 MB) compressed to **150.9 KB (−89.8 %)**; OCR produced a searchable PDF with a correct, extractable text layer.
 
