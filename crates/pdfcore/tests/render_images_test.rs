@@ -254,6 +254,62 @@ fn page_numbers_are_added() {
 }
 
 #[test]
+fn text_search_finds_matches_across_pages() {
+    if !engine_available() {
+        eprintln!("skipping: pdfium not available");
+        return;
+    }
+    let (dir, input) = setup("search", 4);
+    // The sample generator labels pages "<label> page N"; search for a phrase
+    // that exists on several pages plus one that does not exist at all.
+    let cancel = CancelToken::new();
+    let result = pdfcore::render::search_document(
+        &input,
+        None,
+        "search page",
+        false,
+        50,
+        &cancel,
+        &|_, _| {},
+    )
+    .expect("search runs");
+    assert_eq!(result.total_matches, 4, "one match on each page");
+    assert_eq!(result.pages_with_matches, 4);
+    assert!(!result.truncated);
+    let first = &result.matches[0];
+    assert_eq!(first.page, 1);
+    assert!(first.snippet.to_lowercase().contains("search page"), "snippet was {:?}", first.snippet);
+
+    // Case-insensitive by default, case-sensitive when asked.
+    let insensitive = pdfcore::render::search_document(&input, None, "SEARCH PAGE", false, 50, &cancel, &|_, _| {}).unwrap();
+    assert_eq!(insensitive.total_matches, 4);
+    let sensitive = pdfcore::render::search_document(&input, None, "SEARCH PAGE", true, 50, &cancel, &|_, _| {}).unwrap();
+    assert_eq!(sensitive.total_matches, 0);
+
+    // No matches for text that is not present.
+    let missing = pdfcore::render::search_document(&input, None, "zzzz-not-there", false, 50, &cancel, &|_, _| {}).unwrap();
+    assert_eq!(missing.total_matches, 0);
+    assert_eq!(missing.pages_with_matches, 0);
+
+    // The result cap is honoured and reported.
+    let capped = pdfcore::render::search_document(&input, None, "page", false, 3, &cancel, &|_, _| {}).unwrap();
+    assert_eq!(capped.total_matches, 3);
+    assert!(capped.truncated);
+
+    // Cancellation stops the scan.
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+    assert!(matches!(
+        pdfcore::render::search_document(&input, None, "page", false, 50, &cancelled, &|_, _| {}),
+        Err(pdfcore::PdfError::Cancelled)
+    ));
+
+    // Empty queries are rejected.
+    assert!(pdfcore::render::search_document(&input, None, "   ", false, 50, &cancel, &|_, _| {}).is_err());
+    let _ = dir;
+}
+
+#[test]
 fn annotations_are_flattened_into_pages() {
     if !engine_available() {
         eprintln!("skipping: pdfium not available");

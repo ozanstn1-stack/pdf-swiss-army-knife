@@ -237,3 +237,149 @@ pub fn document_has_text(path: &Path, password: Option<&str>, sample: u32) -> Pd
     }
     Ok(false)
 }
+
+// ---------------------------------------------------------------------------
+// Text search (reading mode)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TextMatch {
+    pub page: u32,
+    /// Short excerpt around the match (whitespace collapsed).
+    pub snippet: String,
+    /// 1-based index of the match within its page.
+    pub index_on_page: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchResult {
+    pub matches: Vec<TextMatch>,
+    pub pages_with_matches: u32,
+    pub total_matches: u32,
+    /// True when the scan stopped early because `max_results` was reached.
+    pub truncated: bool,
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Builds a snippet around a match position in the collapsed page text.
+fn snippet_for(text: &str, query_len: usize, position: usize) -> String {
+    let context = 48usize;
+    let start = position.saturating_sub(context);
+    let end = (position + query_len + context).min(text.len());
+    if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return text.chars().take(96).collect();
+    }
+    let mut slice = String::new();
+    if start > 0 {
+        slice.push('…');
+    }
+    slice.push_str(&text[start..end]);
+    if end < text.len() {
+        slice.push('…');
+    }
+    slice
+}
+
+/// Searches the document's text layer with pdfium's search engine.
+/// `max_results` caps the work for very large documents.
+pub fn search_document(
+    path: &Path,
+    password: Option<&str>,
+    query: &str,
+    match_case: bool,
+    max_results: u32,
+    cancel: &crate::progress::CancelToken,
+    on_page: &dyn Fn(u32, u32),
+) -> PdfResult<SearchResult> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Err(PdfError::InvalidInput("search text is empty".into()));
+    }
+    let pdfium = pdfium()?;
+    let doc = pdfium
+        .load_pdf_from_file(path, password)
+        .map_err(|e| PdfError::InvalidPdf(format!("{e}")))?;
+    let total = doc.pages().len().max(0) as u32;
+    let mut matches: Vec<TextMatch> = Vec::new();
+    let mut pages_with_matches = 0u32;
+    let mut truncated = false;
+    let options = PdfSearchOptions::new().match_case(match_case);
+    let limit = max_results.max(1);
+
+    for index in 0..total {
+        cancel.check()?;
+        on_page(index + 1, total);
+        let Ok(page) = doc.pages().get(index as PdfPageIndex) else {
+            continue;
+        };
+        let Ok(text) = page.text() else { continue };
+        // Use pdfium's matcher for correctness, then build snippets from the
+        // extracted text so the UI can show context.
+        let found = match text.search(query, &options) {
+            Ok(search) => {
+                let mut count = 0u32;
+                let cursor = search;
+                while let Some(segments) = cursor.find_next() {
+                    if !segments.is_empty() {
+                        count += 1;
+                    }
+                    if count >= 64 {
+                        break;
+                    }
+                }
+                count
+            }
+            Err(_) => 0,
+        };
+        if found == 0 {
+            continue;
+        }
+        let collapsed = collapse_whitespace(&text.all());
+        let (needle, hay) = if match_case {
+            (query.to_string(), collapsed.clone())
+        } else {
+            (query.to_lowercase(), collapsed.to_lowercase())
+        };
+        let mut page_matches = 0u32;
+        let mut from = 0usize;
+        while let Some(position) = hay[from..].find(&needle) {
+            let absolute = from + position;
+            matches.push(TextMatch {
+                page: index + 1,
+                snippet: snippet_for(&collapsed, needle.len(), absolute),
+                index_on_page: page_matches + 1,
+            });
+            page_matches += 1;
+            from = absolute + needle.len().max(1);
+            if matches.len() as u32 >= limit {
+                truncated = true;
+                break;
+            }
+        }
+        if page_matches == 0 {
+            // pdfium matched but the collapsed-text scan did not (for example
+            // when a match spans a line break): still report the page.
+            matches.push(TextMatch {
+                page: index + 1,
+                snippet: String::new(),
+                index_on_page: 1,
+            });
+        }
+        pages_with_matches += 1;
+        if truncated {
+            break;
+        }
+    }
+    if truncated {
+        matches.truncate(limit as usize);
+    }
+    Ok(SearchResult {
+        total_matches: matches.len() as u32,
+        matches,
+        pages_with_matches,
+        truncated,
+    })
+}
