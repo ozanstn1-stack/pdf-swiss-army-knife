@@ -1,0 +1,59 @@
+# dependencies
+node_modules/
+src-tauri/target/
+target/
+
+# build output
+dist/
+src-tauri/gen/
+release-artifacts/
+*.exe
+*.msi
+*.nsis.zip
+
+# engine binaries fetched at build time (not committed; see scripts/fetch-engines.ps1)
+# the bundled font (PT Sans, OFL) IS committed so builds are reproducible offline
+src-tauri/resources/engines/
+
+# logs / temp
+*.log
+logs/
+temp/
+tmp/
+.env
+.env.*
+!.env.example
+
+# editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# test artifacts
+tests/artifacts/
+crates/pdfcore/tests/artifacts/
+
+# sample documents produced by running the tools on samples/
+samples/*_compressed.pdf
+samples/*_merged.pdf
+samples/*_split/
+samples/*_organized.pdf
+samples/*_extracted.pdf
+samples/*_cleaned.pdf
+samples/*_rotated.pdf
+samples/*_resized.pdf
+samples/*_cropped.pdf
+samples/*_numbered.pdf
+samples/*_annotated.pdf
+samples/*_watermarked.pdf
+samples/*_protected.pdf
+samples/*_unlocked.pdf
+samples/*_metadata.pdf
+samples/*_ocr.pdf
+samples/*_ocr.txt
+samples/*_ocr.md
+samples/*_album.pdf
+samples/*_images/
+samples/*_batch.pdf

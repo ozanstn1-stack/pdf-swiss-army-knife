@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/pdfcore", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ozanstn1-stack/pdf-swiss-army-knife"
+authors = ["PDF Swiss Army Knife contributors"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PDF Swiss Army Knife",
+  "version": "1.0.0",
+  "identifier": "io.github.ozanstn1.pdfswissarmyknife",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "PDF Swiss Army Knife",
+        "label": "main",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 1060,
+        "minHeight": 680,
+        "center": true,
+        "theme": "Dark",
+        "dragDropEnabled": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "category": "Utility",
+    "shortDescription": "All your PDF tools in one place",
+    "longDescription": "PDF Swiss Army Knife is a local-first desktop toolkit for merging, splitting, compressing, OCR-ing, watermarking, protecting and converting PDF documents. All processing happens on your machine.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/engines/**/*"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "languages": ["English", "Turkish"],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}
