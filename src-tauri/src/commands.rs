@@ -175,6 +175,8 @@ pub async fn page_preview(
     page: u32,
     max_width: Option<u32>,
     password: Option<String>,
+    format: Option<String>,
+    quality: Option<u8>,
 ) -> Result<Thumbnail, PdfError> {
     run_blocking(move || {
         let max_width = max_width.unwrap_or(1100).clamp(200, 4000);
@@ -184,15 +186,80 @@ pub async fn page_preview(
             max_height: None,
         };
         let rendered = pdfcore::render::render_page(Path::new(&path), password.as_deref(), page, &options)?;
-        let bytes = pdfcore::images::encode_image(&rendered, pdfcore::images::ImageFormat::Png, 90, false)?;
+        // Reading mode requests JPEG (much smaller for large pages); the
+        // thumbnail/preview default stays lossless PNG.
+        let (bytes, mime) = match format.as_deref() {
+            Some("jpeg") | Some("jpg") => (
+                pdfcore::images::encode_image(
+                    &rendered,
+                    pdfcore::images::ImageFormat::Jpeg,
+                    quality.unwrap_or(86),
+                    false,
+                )?,
+                "image/jpeg",
+            ),
+            _ => (
+                pdfcore::images::encode_image(&rendered, pdfcore::images::ImageFormat::Png, 90, false)?,
+                "image/png",
+            ),
+        };
         let data_url = format!(
-            "data:image/png;base64,{}",
+            "data:{mime};base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
         );
         Ok(Thumbnail {
             data_url,
             width: rendered.width,
             height: rendered.height,
+        })
+    })
+    .await
+}
+
+/// Extracts the text layer of a single page (reading mode: "copy page text").
+#[tauri::command]
+pub async fn page_text(path: String, page: u32, password: Option<String>) -> Result<String, PdfError> {
+    run_blocking(move || pdfcore::render::extract_page_text(Path::new(&path), password.as_deref(), page)).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResponse {
+    pub matches: Vec<pdfcore::render::TextMatch>,
+    pub pages_with_matches: u32,
+    pub total_matches: u32,
+    pub truncated: bool,
+}
+
+/// Full-text search over the document's text layer (reading mode).
+#[tauri::command]
+pub async fn search_document(
+    app: AppHandle,
+    registry: State<'_, JobRegistry>,
+    path: String,
+    query: String,
+    match_case: Option<bool>,
+    max_results: Option<u32>,
+    password: Option<String>,
+    job_id: Option<String>,
+) -> Result<SearchResponse, PdfError> {
+    operation_with_progress(app, registry, job_id, move |progress, cancel| {
+        let result = pdfcore::render::search_document(
+            Path::new(&path),
+            password.as_deref(),
+            &query,
+            match_case.unwrap_or(false),
+            max_results.unwrap_or(200).clamp(1, 2000),
+            cancel,
+            &|current, total| {
+                progress(pdfcore::progress::ProgressEvent::new("search.page", current as u64, total as u64));
+            },
+        )?;
+        Ok(SearchResponse {
+            matches: result.matches,
+            pages_with_matches: result.pages_with_matches,
+            total_matches: result.total_matches,
+            truncated: result.truncated,
         })
     })
     .await
