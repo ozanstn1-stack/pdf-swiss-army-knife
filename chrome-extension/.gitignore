@@ -1,0 +1,7 @@
+# generated at build time (fonts and pdf.js data), not committed
+public/fonts/
+public/vendor/
+
+# build output
+node_modules/
+dist/

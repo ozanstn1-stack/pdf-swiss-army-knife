@@ -1,6 +1,6 @@
 # PDF Swiss Army Knife
 
-**All your PDF tools in one place — a local-first Windows desktop toolkit for PDFs.**
+**All your PDF tools in one place — a local-first Windows desktop toolkit for PDFs, plus a Chrome extension for the browser.**
 Merge, split, organize, compress, OCR, watermark, protect and convert documents without uploading anything anywhere.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
@@ -32,6 +32,15 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 | Reading mode | Reading mode search |
 | --- | --- |
 | ![Reading mode](docs/screenshots/14-reader.png) | ![Reading mode search](docs/screenshots/15-reader-search.png) |
+
+### Chrome extension
+| Home | Reading mode |
+| --- | --- |
+| ![Extension home](docs/screenshots/20-extension-home.png) | ![Extension reader](docs/screenshots/21-extension-reader.png) |
+
+| Organize pages | |
+| --- | --- |
+| ![Extension organize](docs/screenshots/22-extension-organize.png) | |
 
 | Page tools | Settings |
 | --- | --- |
@@ -89,6 +98,40 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 - Recent files (paths + timestamps only), keyboard shortcuts, cancel-able long operations, friendly error messages with stable error codes.
 - Windows installer (NSIS) and portable ZIP.
 
+## Chrome extension
+
+A second, fully offline build of the toolkit that runs inside Chrome (Manifest V3, no host permissions, no network calls). It shares the design language of the desktop app and implements the operations with [pdf-lib](https://github.com/Hopding/pdf-lib) (structure) and [pdf.js](https://github.com/mozilla/pdf.js) (rendering, text, search) — everything bundled locally.
+
+| Included | Notes |
+| --- | --- |
+| **Reading mode** | Continuous scroll, fit-width + 25–400 % zoom, full-text search with snippets, copy page text |
+| **Merge** | Ordered multi-file merge with metadata from the first document |
+| **Organize pages** | Thumbnails, select/range-select, move, rotate, duplicate, delete, undo |
+| **Split** | Every N pages, ranges, individual pages, at page numbers |
+| **Page tools** | Extract, delete and rotate with `1,3,5-8` selections |
+| **Compress** | Lossless optimizer or strong re-render (DPI/quality) with a measured estimate |
+| **Watermark** | Unicode text stamps (bundled PT Sans, OFL) with position, rotation, opacity and tiling |
+| **Page numbers** | Four formats, six positions, start value, colour |
+| **Metadata** | Edit or clear title/author/subject/keywords/creator/producer |
+| **Convert** | PDF → PNG/JPG at 72–300 DPI, and PNG/JPG/WEBP → PDF with page setup |
+
+**Install (unpacked, no store needed):** download `PDF-Swiss-Army-Knife-Chrome-Extension-1.0.0.zip`, extract it, open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and select the extracted folder. The toolbar button opens the toolkit in a tab; you can also drop PDFs directly onto the page.
+
+**Not in the browser build (use the desktop app):** OCR, password protect/unlock, page size/crop, annotations, batch processing. The extension also never modifies your originals — results are new downloads.
+
+**Development**
+
+```powershell
+cd chrome-extension
+npm install
+npm run build          # bundles the extension into chrome-extension/dist
+npm test               # 10 Node integration tests for the operation modules
+npm run selftest:browser   # runs 11 checks inside real Chrome (needs npm run preview)
+npm run package        # release-artifacts/PDF-Swiss-Army-Knife-Chrome-Extension-<version>.zip
+```
+
+The browser self test (`app.html?selftest=1`) exercises the real modules inside Chrome — parsing, canvas rendering, search, merging, watermarking with the bundled font, compression and encrypted-input refusal — so the extension can be verified without manual clicking.
+
 ---
 
 ## Tech stack
@@ -112,6 +155,7 @@ pdf-swiss-army-knife/
 │   │                        # render (pdfium), images, compress, ocr, watermark,
 │   │                        # numbering, annotate, pagelayout, textimg, engines
 │   └── tests/               # 50 integration tests + synthetic sample generators
+├── chrome-extension/        # MV3 browser build (pdf-lib + pdf.js), offline, no host permissions
 ├── src-tauri/               # Tauri shell: commands, job registry (progress/cancel),
 │   └── resources/engines/   # bundled pdfium.dll, qpdf.exe, tesseract (fetched, gitignored)
 ├── src/                     # React UI (screens, components, i18n, state)
@@ -169,6 +213,8 @@ npm run test:rust          # or: cargo test --workspace
 ```
 
 The suite (63 tests: 13 unit + 50 integration) covers merge, split, extract, delete, reorder/duplicate/rotate plans, compression (lossless + raster), PDF↔image conversion, watermarking, AES-256 protect/unlock, metadata, annotations, page numbering, resize/crop, OCR (searchable PDF, text, Markdown, noisy scans, single-page documents), batch stability, the IPC wire format and a dedicated hostile-input suite (empty, corrupt, locked, oversized, wrong-password, out-of-range, cancellation).
+
+The browser build has its own suites: `cd chrome-extension && npm test` (10 Node integration tests over the same operation modules) and `npm run selftest:browser` (11 checks executed inside headless Chrome, including canvas rendering and search).
 
 ### Build & release
 

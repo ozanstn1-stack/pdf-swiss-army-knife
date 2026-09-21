@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "PDF Swiss Army Knife",
+  "version": "1.0.0",
+  "description": "Offline PDF toolkit: merge, split, organize, compress, watermark, convert and more. Nothing leaves your browser.",
+  "minimum_chrome_version": "114",
+  "action": {
+    "default_title": "PDF Swiss Army Knife",
+    "default_icon": {
+      "32": "icons/icon-32.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "icons": {
+    "32": "icons/icon-32.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["contextMenus"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' data: blob:; img-src 'self' data: blob:"
+  },
+  "offline_enabled": true
+}

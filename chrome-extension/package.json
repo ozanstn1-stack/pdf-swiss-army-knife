@@ -1,0 +1,37 @@
+{
+  "name": "pdf-swiss-army-knife-extension",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Chrome extension build of PDF Swiss Army Knife (offline, local-first)",
+  "scripts": {
+    "assets": "node scripts/prepare-assets.mjs",
+    "dev": "npm run assets && vite",
+    "build": "npm run assets && tsc --noEmit && vite build",
+    "test": "tsx --test test/*.test.ts",
+    "preview": "vite preview --port 4173",
+    "package": "node scripts/package.mjs",
+    "selftest:browser": "node scripts/browser-selftest.mjs",
+    "test:all": "npm run test && npm run build && npm run selftest:browser"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "lucide-react": "^0.468.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/chrome": "^0.0.300",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.3.0"
+  }
+}
