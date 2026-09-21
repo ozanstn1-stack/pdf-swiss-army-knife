@@ -1,13 +1,13 @@
 # PDF Swiss Army Knife
 
 **All your PDF tools in one place — a local-first Windows desktop toolkit for PDFs, plus a Chrome extension for the browser.**
-Merge, split, organize, compress, OCR, watermark, protect and convert documents without uploading anything anywhere.
+Merge, split, organize, compress, OCR, watermark, protect and convert documents without uploading anything anywhere — with an optional, clearly fenced AI assistant (DeepSeek or any OpenAI-compatible endpoint) for summaries, translation and document Q&A.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
 ![Version](https://img.shields.io/badge/version-1.1.0-success)
 
-> **Privacy first:** every operation runs on your machine. There is no cloud upload, no telemetry and no analytics. Passwords are never logged or stored. See [Privacy & security](#privacy--security).
+> **Privacy first:** every operation runs on your machine by default. There is no telemetry and no analytics, and passwords are never logged or stored. The only network feature is the optional AI assistant, which stays disabled until you add your own API key and confirm the data notice. See [Privacy & security](#privacy--security).
 
 ---
 
@@ -33,6 +33,10 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 | --- | --- |
 | ![Reading mode](docs/screenshots/14-reader.png) | ![Reading mode search](docs/screenshots/15-reader-search.png) |
 
+| AI assistant (optional) | AI Q&A |
+| --- | --- |
+| ![AI assistant](docs/screenshots/30-ai-summary.png) | ![AI Q&A](docs/screenshots/31-ai-ask.png) |
+
 ### Chrome extension
 | Home | Reading mode |
 | --- | --- |
@@ -49,6 +53,20 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 ---
 
 ## Features
+
+### AI assistant (optional, the only network feature)
+- **Summary** — short/medium/detailed, paragraph/bullets/executive style, output language, optional focus ("payment terms and dates"). Long documents are summarized with a map/reduce pass so nothing is silently dropped.
+- **Translation** — page-by-page Markdown translation (optionally bilingual), 8+ target languages.
+- **Ask the document** — grounded Q&A over the extracted text with page citations; a keyword retriever picks the relevant pages first.
+- **Repair OCR text** — fixes broken words, hyphenation and spacing in scanned documents without summarizing.
+- **Metadata ideas** — suggests title/author/subject/keywords and can apply them to a new PDF.
+
+How it stays honest:
+- **Off by default.** No AI request is possible until you add your own API key in Settings *and* confirm the data notice for the document.
+- **What is sent:** only the extracted text of the document you chose (page count and character count are shown before you run). Never the file, never passwords, never metadata you did not ask for.
+- **Key storage:** the API key is encrypted with **Windows DPAPI** (`CryptProtectData`), so only your Windows account on that machine can decrypt it. It is never logged.
+- **Any OpenAI-compatible endpoint works.** Point the base URL at a local server (Ollama, LM Studio, llama.cpp) and the AI features stay entirely offline.
+- Failures are reported with clear codes: missing key, rejected key, rate limit, insufficient balance, network unreachable, no text layer (run OCR first), context too large.
 
 ### Reading mode
 - **Continuous scroll** through the whole document; pages render lazily at the requested zoom.
@@ -141,6 +159,7 @@ The browser self test (`app.html?selftest=1`) exercises the real modules inside 
 | Shell | [Tauri 2](https://tauri.app/) (Rust) + WebView2 |
 | Frontend | React 19, TypeScript, Vite 6, Tailwind CSS 4, lucide-react icons, zustand |
 | PDF core | Rust crate `pdfcore` built on [lopdf](https://github.com/J-F-Liu/lopdf) |
+| AI (optional) | Rust crate `aicore` — DeepSeek chat completions over `reqwest` (rustls), SSE streaming, map/reduce summarization, keyword retrieval; DPAPI-encrypted key storage |
 | Rendering | [pdfium](https://pdfium.googlesource.com/pdfium/) via `pdfium-render` (bundled `pdfium.dll`) |
 | OCR | [Tesseract 5](https://github.com/tesseract-ocr/tesseract) (bundled) + `tessdata_fast` models |
 | Security engine | lopdf standard security handler; [qpdf](https://qpdf.readthedocs.io/) bundled for advanced structural work |
@@ -150,6 +169,8 @@ The browser self test (`app.html?selftest=1`) exercises the real modules inside 
 
 ```
 pdf-swiss-army-knife/
+├── crates/aicore/           # DeepSeek/OpenAI-compatible client (the only networking code)
+│   └── tests/               #   12 tests against a local mock server (streaming, errors, prompts)
 ├── crates/pdfcore/          # all PDF logic, no Tauri dependency (unit + integration tested)
 │   ├── src/                 # merge, organize, split, security, metadata, info,
 │   │                        # render (pdfium), images, compress, ocr, watermark,
@@ -214,6 +235,8 @@ npm run test:rust          # or: cargo test --workspace
 
 The suite (63 tests: 13 unit + 50 integration) covers merge, split, extract, delete, reorder/duplicate/rotate plans, compression (lossless + raster), PDF↔image conversion, watermarking, AES-256 protect/unlock, metadata, annotations, page numbering, resize/crop, OCR (searchable PDF, text, Markdown, noisy scans, single-page documents), batch stability, the IPC wire format and a dedicated hostile-input suite (empty, corrupt, locked, oversized, wrong-password, out-of-range, cancellation).
 
+The AI layer has its own suite: `cargo test -p aicore` (12 tests) runs the real client against a local mock HTTP server, covering SSE streaming, error mapping (401/402/429), cancellation, chunking, retrieval and prompt construction.
+
 The browser build has its own suites: `cd chrome-extension && npm test` (10 Node integration tests over the same operation modules) and `npm run selftest:browser` (11 checks executed inside headless Chrome, including canvas rendering and search).
 
 ### Build & release
@@ -250,7 +273,10 @@ npm run package            # release-artifacts/: installer, portable ZIP, SHA256
 
 ## Privacy & security
 
-**No cloud upload.** The application never sends documents anywhere; there is no networking code in the product, no telemetry and no analytics.
+**No cloud upload by default.** The application never sends documents anywhere unless you explicitly run an AI action with your own key (see the AI section above); there is no telemetry and no analytics.
+
+- **AI requests are opt-in, per document.** You add your own DeepSeek-compatible API key, confirm the data notice, and the app shows exactly how much text (pages/characters) will be sent. Only extracted text is transmitted.
+- Both the key and the AI settings live in the app config folder; the key is DPAPI-encrypted on Windows and is never written to logs or the recent-files list.
 
 - **Passwords** are used in memory only, never written to disk or logs, and cleared from UI state after the operation.
 - **Recent files** store only the path, file name, tool and timestamp. They can be cleared at any time and are skipped when the setting is disabled.
@@ -290,6 +316,8 @@ Honest list of what v1.0.0 does **not** do:
 - **Page numbering uses the standard Helvetica font**, so the label text itself is ASCII (numbers, "Page", "/").
 - **Reading mode renders pages as images**, so drag-selecting text inside a page is not possible; use the search box or "Copy page text" (both use the real text layer).
 - Only a single window/instance is supported; there is no plugin system.
+- **AI features need your own key** and an internet connection (or a local OpenAI-compatible server). The AI works on extracted text only — it does not translate or rewrite the PDF layout, and documents longer than 400 pages per request are capped (select fewer pages).
+- The AI assistant is not part of the Chrome extension (the extension intentionally has no network permissions), and there are no batch AI operations yet.
 - macOS/Linux are not built yet.
 
 ## Roadmap
@@ -299,6 +327,8 @@ Honest list of what v1.0.0 does **not** do:
 - [ ] WYSIWYG editor for existing flattened annotations (real PDF annotation objects).
 - [ ] Print support with page range selection.
 - [ ] Text selection/highlighting inside reading mode (currently page-level copy).
+- [ ] AI operations in the batch queue (summarize/translate many files at once).
+- [ ] Optional "explain this page" action in reading mode using the current selection.
 - [ ] Additional OCR language packs via an in-app manager.
 - [ ] macOS/Linux builds (the core is already platform-agnostic).
 - [ ] Signed builds and MSIX packaging.
