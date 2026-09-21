@@ -1,0 +1,424 @@
+//! aicore — DeepSeek API client and prompt pipeline for PDF Swiss Army Knife.
+//!
+//! This is the **only** component in the project that talks to the network.
+//! It is opt-in: nothing is sent unless the user explicitly runs an AI action
+//! with their own API key, and the text that is sent is exactly the extracted
+//! document text the user chose to process.
+//!
+//! The crate is independent from the UI and from pdfcore so it can be tested
+//! against a local mock server (see `tests/`).
+
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+pub mod prompts;
+
+pub use prompts::{chunk_text, Plan};
+
+pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
+pub const DEFAULT_MODEL: &str = "deepseek-chat";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfig {
+    pub api_key: String,
+    #[serde(default = "default_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_base_url() -> String {
+    DEFAULT_BASE_URL.to_string()
+}
+fn default_model() -> String {
+    DEFAULT_MODEL.to_string()
+}
+fn default_temperature() -> f32 {
+    0.2
+}
+fn default_max_tokens() -> u32 {
+    4096
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            base_url: default_base_url(),
+            model: default_model(),
+            temperature: default_temperature(),
+            max_tokens: default_max_tokens(),
+        }
+    }
+}
+
+impl AiConfig {
+    pub fn is_configured(&self) -> bool {
+        !self.api_key.trim().is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: "system".into(),
+            content: content.into(),
+        }
+    }
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".into(),
+            content: content.into(),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AiError {
+    #[error("no API key configured")]
+    MissingApiKey,
+    #[error("the API key was rejected by DeepSeek")]
+    InvalidApiKey,
+    #[error("DeepSeek rate limit reached, try again in a moment")]
+    RateLimited,
+    #[error("the DeepSeek account has insufficient balance")]
+    InsufficientBalance,
+    #[error("could not reach api.deepseek.com")]
+    Network,
+    #[error("DeepSeek returned an error: {0}")]
+    Server(String),
+    #[error("unexpected response from DeepSeek")]
+    InvalidResponse,
+    #[error("operation cancelled")]
+    Cancelled,
+    #[error("the document has no extractable text (run OCR first)")]
+    NoText,
+    #[error("request was too large for the model context")]
+    TooLarge,
+}
+
+pub type AiResult<T> = Result<T, AiError>;
+
+/// Cooperative cancellation shared with the UI.
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+    pub fn check(&self) -> AiResult<()> {
+        if self.is_cancelled() {
+            Err(AiError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChatOptions {
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatRequestBody<'a> {
+    model: &'a str,
+    messages: &'a [ChatMessage],
+    temperature: f32,
+    max_tokens: u32,
+    stream: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatResponseBody {
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatChoice {
+    message: ChatMessageContent,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatMessageContent {
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChunk {
+    choices: Vec<StreamChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChoice {
+    delta: StreamDelta,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct StreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiErrorBody {
+    error: ApiErrorDetail,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiErrorDetail {
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    code: String,
+    #[serde(default, rename = "type")]
+    kind: String,
+}
+
+/// Minimal DeepSeek chat-completions client.
+pub struct DeepSeekClient {
+    config: AiConfig,
+    http: reqwest::Client,
+}
+
+impl DeepSeekClient {
+    pub fn new(config: AiConfig) -> AiResult<Self> {
+        if !config.is_configured() {
+            return Err(AiError::MissingApiKey);
+        }
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(180))
+            .connect_timeout(Duration::from_secs(20))
+            .user_agent(concat!("PDFSwissArmyKnife/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|_| AiError::Network)?;
+        Ok(Self { config, http })
+    }
+
+    pub fn config(&self) -> &AiConfig {
+        &self.config
+    }
+
+    fn endpoint(&self) -> String {
+        format!(
+            "{}/chat/completions",
+            self.config.base_url.trim_end_matches('/')
+        )
+    }
+
+    /// Non-streaming completion (used for tests and short tasks).
+    pub async fn chat(&self, messages: &[ChatMessage], options: ChatOptions) -> AiResult<String> {
+        let body = ChatRequestBody {
+            model: &self.config.model,
+            messages,
+            temperature: options.temperature.unwrap_or(self.config.temperature),
+            max_tokens: options.max_tokens.unwrap_or(self.config.max_tokens),
+            stream: false,
+        };
+        let response = self
+            .http
+            .post(self.endpoint())
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| AiError::Network)?;
+
+        let status = response.status();
+        let text = response.text().await.map_err(|_| AiError::Network)?;
+        if !status.is_success() {
+            return Err(map_http_error(status.as_u16(), &text));
+        }
+        let parsed: ChatResponseBody = serde_json::from_str(&text).map_err(|_| AiError::InvalidResponse)?;
+        parsed
+            .choices
+            .into_iter()
+            .next()
+            .map(|choice| choice.message.content)
+            .filter(|content| !content.trim().is_empty())
+            .ok_or(AiError::InvalidResponse)
+    }
+
+    /// Streaming completion: `on_delta` receives incremental text so the UI can
+    /// render the answer while it is being produced.
+    pub async fn chat_stream(
+        &self,
+        messages: &[ChatMessage],
+        options: ChatOptions,
+        cancel: &CancelToken,
+        on_delta: &mut (dyn FnMut(&str) + Send),
+    ) -> AiResult<String> {
+        let body = ChatRequestBody {
+            model: &self.config.model,
+            messages,
+            temperature: options.temperature.unwrap_or(self.config.temperature),
+            max_tokens: options.max_tokens.unwrap_or(self.config.max_tokens),
+            stream: true,
+        };
+        let response = self
+            .http
+            .post(self.endpoint())
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| AiError::Network)?;
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(map_http_error(status.as_u16(), &text));
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut full = String::new();
+        while let Some(chunk) = stream.next().await {
+            cancel.check()?;
+            let bytes = chunk.map_err(|_| AiError::Network)?;
+            buffer.push_str(&String::from_utf8_lossy(&bytes));
+            // Server-sent events: lines like `data: {...}` separated by blank lines.
+            while let Some(position) = buffer.find('\n') {
+                let line = buffer[..position].trim().to_string();
+                buffer.drain(..=position);
+                let Some(payload) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let payload = payload.trim();
+                if payload == "[DONE]" {
+                    continue;
+                }
+                if let Ok(parsed) = serde_json::from_str::<StreamChunk>(payload) {
+                    if let Some(content) = parsed
+                        .choices
+                        .into_iter()
+                        .next()
+                        .and_then(|choice| choice.delta.content)
+                    {
+                        if !content.is_empty() {
+                            full.push_str(&content);
+                            on_delta(&content);
+                        }
+                    }
+                }
+            }
+        }
+        if full.trim().is_empty() {
+            return Err(AiError::InvalidResponse);
+        }
+        Ok(full)
+    }
+
+    /// Cheap connectivity/credentials check for the settings screen.
+    pub async fn test_connection(&self) -> AiResult<String> {
+        let messages = vec![ChatMessage::user("Reply with the single word: ready")];
+        let reply = self
+            .chat(
+                &messages,
+                ChatOptions {
+                    temperature: Some(0.0),
+                    max_tokens: Some(16),
+                },
+            )
+            .await?;
+        Ok(reply.trim().to_string())
+    }
+}
+
+fn map_http_error(status: u16, body: &str) -> AiError {
+    let detail = serde_json::from_str::<ApiErrorBody>(body).ok().map(|parsed| parsed.error);
+    let code = detail
+        .as_ref()
+        .map(|error| format!("{} {}", error.code, error.kind).to_lowercase())
+        .unwrap_or_default();
+    let message = detail.map(|error| error.message).unwrap_or_default();
+    match status {
+        401 | 403 => AiError::InvalidApiKey,
+        402 => AiError::InsufficientBalance,
+        429 => AiError::RateLimited,
+        400 if code.contains("context") || message.to_lowercase().contains("context") => AiError::TooLarge,
+        _ => {
+            let summary = if message.is_empty() {
+                format!("HTTP {status}")
+            } else {
+                format!("HTTP {status}: {message}")
+            };
+            AiError::Server(summary)
+        }
+    }
+}
+
+/// Formats a server-sent stream of text deltas into the final answer while
+/// keeping the caller informed. Kept as a small helper so the command layer
+/// stays thin.
+pub async fn run_plan(
+    client: &DeepSeekClient,
+    plan: &Plan,
+    cancel: &CancelToken,
+    on_progress: &mut (dyn FnMut(&str, usize, usize) + Send),
+    on_delta: &mut (dyn FnMut(&str) + Send),
+) -> AiResult<String> {
+    match plan {
+        Plan::Single { messages } => {
+            on_progress("request", 0, 1);
+            let text = client.chat_stream(messages, ChatOptions::default(), cancel, on_delta).await?;
+            on_progress("request", 1, 1);
+            Ok(text)
+        }
+        Plan::MapReduce { chunks, reduce } => {
+            let total = chunks.len() + 1;
+            let mut partials: Vec<String> = Vec::with_capacity(chunks.len());
+            for (index, chunk) in chunks.iter().enumerate() {
+                cancel.check()?;
+                on_progress("chunk", index, total);
+                let messages = vec![
+                    ChatMessage::system(prompts::MAP_SYSTEM),
+                    ChatMessage::user(chunk.clone()),
+                ];
+                let partial = client
+                    .chat(
+                        &messages,
+                        ChatOptions {
+                            temperature: Some(0.1),
+                            max_tokens: Some(1024),
+                        },
+                    )
+                    .await?;
+                partials.push(partial);
+            }
+            on_progress("reduce", chunks.len(), total);
+            let combined = partials.join("\n\n---\n\n");
+            let messages = vec![
+                ChatMessage::system(prompts::REDUCE_SYSTEM),
+                ChatMessage::user(format!("{}\n\n{}", reduce, combined)),
+            ];
+            let final_text = client
+                .chat_stream(&messages, ChatOptions::default(), cancel, on_delta)
+                .await?;
+            on_progress("reduce", total, total);
+            Ok(final_text)
+        }
+    }
+}
