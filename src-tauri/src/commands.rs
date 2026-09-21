@@ -1112,13 +1112,20 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, PdfError> {
     Ok(dir)
 }
 
+/// Reads a text file, tolerating a UTF-8 byte order mark (hand-edited files).
+fn read_config_text(path: &Path) -> Result<String, PdfError> {
+    let bytes = std::fs::read(path).map_err(PdfError::from_io)?;
+    let text = String::from_utf8_lossy(bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes)).to_string();
+    Ok(text)
+}
+
 #[tauri::command]
 pub fn load_settings(app: AppHandle) -> Result<serde_json::Value, PdfError> {
     let path = config_dir(&app)?.join("settings.json");
     if !path.exists() {
         return Ok(serde_json::json!({}));
     }
-    let text = std::fs::read_to_string(&path).map_err(PdfError::from_io)?;
+    let text = read_config_text(&path)?;
     serde_json::from_str(&text).map_err(|e| PdfError::Internal(format!("settings parse error: {e}")))
 }
 
@@ -1136,7 +1143,7 @@ pub fn load_recent(app: AppHandle) -> Result<Vec<RecentEntry>, PdfError> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&path).map_err(PdfError::from_io)?;
+    let text = read_config_text(&path)?;
     let mut entries: Vec<RecentEntry> = serde_json::from_str(&text).unwrap_or_default();
     entries.retain(|e| Path::new(&e.path).exists());
     entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -1148,7 +1155,7 @@ pub fn load_recent(app: AppHandle) -> Result<Vec<RecentEntry>, PdfError> {
 pub fn add_recent(app: AppHandle, entry: RecentEntry) -> Result<(), PdfError> {
     let path = config_dir(&app)?.join("recent.json");
     let mut entries: Vec<RecentEntry> = if path.exists() {
-        std::fs::read_to_string(&path)
+        read_config_text(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default()
@@ -1204,6 +1211,7 @@ pub fn dev_launch_context() -> serde_json::Value {
     serde_json::json!({
         "startScreen": std::env::var("PDFSAK_START_SCREEN").ok(),
         "autoRun": std::env::var("PDFSAK_DEV_RUN").is_ok(),
+        "tab": std::env::var("PDFSAK_DEV_TAB").ok(),
         "files": std::env::var("PDFSAK_DEV_FILES").ok().map(|value| {
             value
                 .split(';')

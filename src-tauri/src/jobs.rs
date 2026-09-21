@@ -10,6 +10,9 @@ use tauri::{AppHandle, Emitter};
 #[derive(Default)]
 pub struct JobRegistry {
     jobs: Mutex<HashMap<String, CancelToken>>,
+    /// AI jobs use their own cancellation primitive (aicore must not depend on
+    /// the PDF engine), so both maps are kept side by side.
+    ai_jobs: Mutex<HashMap<String, aicore::CancelToken>>,
 }
 
 impl JobRegistry {
@@ -22,8 +25,23 @@ impl JobRegistry {
         token
     }
 
+    /// Registers an AI job and returns its cancellation token.
+    pub fn register_ai(&self, job_id: &str) -> aicore::CancelToken {
+        let token = aicore::CancelToken::new();
+        if let Ok(mut jobs) = self.ai_jobs.lock() {
+            jobs.retain(|_, token| !token.is_cancelled());
+            jobs.insert(job_id.to_string(), token.clone());
+        }
+        token
+    }
+
     pub fn cancel(&self, job_id: &str) {
         if let Ok(jobs) = self.jobs.lock() {
+            if let Some(token) = jobs.get(job_id) {
+                token.cancel();
+            }
+        }
+        if let Ok(jobs) = self.ai_jobs.lock() {
             if let Some(token) = jobs.get(job_id) {
                 token.cancel();
             }
@@ -34,10 +52,18 @@ impl JobRegistry {
         if let Ok(mut jobs) = self.jobs.lock() {
             jobs.remove(job_id);
         }
+        if let Ok(mut jobs) = self.ai_jobs.lock() {
+            jobs.remove(job_id);
+        }
     }
 
     pub fn cancel_all(&self) {
         if let Ok(jobs) = self.jobs.lock() {
+            for token in jobs.values() {
+                token.cancel();
+            }
+        }
+        if let Ok(jobs) = self.ai_jobs.lock() {
             for token in jobs.values() {
                 token.cancel();
             }

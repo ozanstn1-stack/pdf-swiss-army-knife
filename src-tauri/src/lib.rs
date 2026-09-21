@@ -3,8 +3,10 @@
 //! The heavy lifting lives in the `pdfcore` crate; this layer only wires
 //! commands, progress events, cancellation and engine discovery.
 
+mod ai;
 mod commands;
 mod jobs;
+mod secret;
 
 use jobs::JobRegistry;
 use tauri::Manager;
@@ -108,6 +110,19 @@ pub fn run() {
             commands::suggest_output,
             commands::file_sizes,
             commands::dev_launch_context,
+            ai::ai_get_settings,
+            ai::ai_save_settings,
+            ai::ai_clear_key,
+            ai::ai_test_connection,
+            ai::ai_document_preview,
+            ai::ai_summarize,
+            ai::ai_translate,
+            ai::ai_ask,
+            ai::ai_cleanup_text,
+            ai::ai_suggest_metadata,
+            ai::ai_cancel,
+            ai::ai_save_output,
+            ai::ai_example_prompts,
             commands::log_frontend,
         ])
         .run(tauri::generate_context!())
