@@ -25,6 +25,15 @@ pub enum ErrorCode {
     ConversionFailed,
     ProcessingFailed,
     Internal,
+    AiNotConfigured,
+    AiInvalidKey,
+    AiRateLimited,
+    AiInsufficientBalance,
+    AiNetwork,
+    AiNoText,
+    AiTooLarge,
+    AiServerError,
+    AiInvalidResponse,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +76,24 @@ pub enum PdfError {
     ProcessingFailed(String),
     #[error("internal error: {0}")]
     Internal(String),
+    #[error("AI is not configured yet")]
+    AiNotConfigured,
+    #[error("the AI API key was rejected")]
+    AiInvalidKey,
+    #[error("the AI service rate limit was reached")]
+    AiRateLimited,
+    #[error("the AI account has insufficient balance")]
+    AiInsufficientBalance,
+    #[error("the AI service could not be reached")]
+    AiNetwork,
+    #[error("the document has no extractable text for AI processing")]
+    AiNoText,
+    #[error("the document is too large for the AI context window")]
+    AiTooLarge,
+    #[error("the AI service returned an error: {0}")]
+    AiServerError(String),
+    #[error("unexpected response from the AI service: {0}")]
+    AiInvalidResponse(String),
 }
 
 impl PdfError {
@@ -91,6 +118,36 @@ impl PdfError {
             PdfError::ConversionFailed(_) => ErrorCode::ConversionFailed,
             PdfError::ProcessingFailed(_) => ErrorCode::ProcessingFailed,
             PdfError::Internal(_) => ErrorCode::Internal,
+            PdfError::AiNotConfigured => ErrorCode::AiNotConfigured,
+            PdfError::AiInvalidKey => ErrorCode::AiInvalidKey,
+            PdfError::AiRateLimited => ErrorCode::AiRateLimited,
+            PdfError::AiInsufficientBalance => ErrorCode::AiInsufficientBalance,
+            PdfError::AiNetwork => ErrorCode::AiNetwork,
+            PdfError::AiNoText => ErrorCode::AiNoText,
+            PdfError::AiTooLarge => ErrorCode::AiTooLarge,
+            PdfError::AiServerError(_) => ErrorCode::AiServerError,
+            PdfError::AiInvalidResponse(_) => ErrorCode::AiInvalidResponse,
+        }
+    }
+
+    /// Builds an error from a stable code (used by the AI layer, which maps
+    /// service failures to friendly codes).
+    pub fn coded(code: ErrorCode, message: impl Into<String>) -> Self {
+        let detail = message.into();
+        match code {
+            ErrorCode::AiNotConfigured => PdfError::AiNotConfigured,
+            ErrorCode::AiInvalidKey => PdfError::AiInvalidKey,
+            ErrorCode::AiRateLimited => PdfError::AiRateLimited,
+            ErrorCode::AiInsufficientBalance => PdfError::AiInsufficientBalance,
+            ErrorCode::AiNetwork => PdfError::AiNetwork,
+            ErrorCode::AiNoText => PdfError::AiNoText,
+            ErrorCode::AiTooLarge => PdfError::AiTooLarge,
+            ErrorCode::AiServerError => PdfError::AiServerError(detail),
+            ErrorCode::AiInvalidResponse => PdfError::AiInvalidResponse(detail),
+            ErrorCode::Cancelled => PdfError::Cancelled,
+            ErrorCode::RangeOutOfBounds => PdfError::RangeOutOfBounds,
+            ErrorCode::InvalidInput => PdfError::InvalidInput(detail),
+            _ => PdfError::Internal(detail),
         }
     }
 
