@@ -12,6 +12,7 @@ import { Badge, Card, Kbd } from "../components/ui";
 import { Screen } from "../components/layout";
 import { useT } from "../lib/i18n";
 import { useSettings } from "../lib/store";
+import { AiSettings } from "../components/ai-settings";
 import { appInfo } from "../lib/api";
 
 function VersionLine() {
@@ -20,7 +21,7 @@ function VersionLine() {
   useEffect(() => {
     void appInfo()
       .then((info) => setVersion(`v${info.appVersion} · core ${info.coreVersion} · ${info.platform}`))
-      .catch(() => setVersion("v1.1.0"));
+      .catch(() => setVersion("v1.2.0"));
   }, []);
   return (
     <p className="text-xs muted">
@@ -216,6 +217,8 @@ export function Settings() {
             ))}
           </ul>
         </Card>
+
+        <AiSettings />
 
         <Card className="p-5 flex flex-col gap-3">
           <h3 className="font-semibold flex items-center gap-2">

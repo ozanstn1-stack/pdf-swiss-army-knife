@@ -296,6 +296,107 @@ export interface SearchResponse {
   truncated: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// AI (DeepSeek) types
+// ---------------------------------------------------------------------------
+
+export type SummaryLength = "short" | "medium" | "detailed";
+export type SummaryStyle = "paragraph" | "bullets" | "executive";
+
+export interface SummaryOptions {
+  language: string;
+  length: SummaryLength;
+  style: SummaryStyle;
+  focus: string;
+}
+
+export interface TranslateOptions {
+  target_language: string;
+  bilingual: boolean;
+}
+
+export interface AiSettingsView {
+  configured: boolean;
+  keyStorage: "none" | "dpapi" | "plain" | string;
+  maskedKey: string;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+export interface AiSettingsInput {
+  apiKey?: string;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+export interface AiTestResult {
+  ok: boolean;
+  message: string;
+  model: string;
+}
+
+export interface AiPreview {
+  pages: number;
+  characters: number;
+  sample: string;
+  estimatedWords: number;
+}
+
+export interface AiTextResult {
+  text: string;
+  pages: number;
+  characters: number;
+  model: string;
+  elapsedMs: number;
+}
+
+export interface AiMetadataSuggestion {
+  title: string;
+  author: string;
+  subject: string;
+  keywords: string[];
+}
+
+export interface AiExamplePrompts {
+  summarize: string[];
+  ask: string[];
+  translate_targets: string[];
+}
+
+export interface AiSummarizeRequest {
+  path: string;
+  options: SummaryOptions;
+  pages?: number[];
+  password?: string;
+  jobId: string;
+}
+
+export interface AiTranslateRequest {
+  path: string;
+  options: TranslateOptions;
+  pages?: number[];
+  password?: string;
+  jobId: string;
+}
+
+export interface AiAskRequest {
+  path: string;
+  question: string;
+  password?: string;
+  jobId: string;
+}
+
+export interface AiCleanupRequest {
+  path: string;
+  pages?: number[];
+  password?: string;
+  jobId: string;
+}
+
 export interface SelectedFile {
   path: string;
   name: string;

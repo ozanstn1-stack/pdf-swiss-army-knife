@@ -1,6 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AiAskRequest,
+  AiCleanupRequest,
+  AiExamplePrompts,
+  AiMetadataSuggestion,
+  AiPreview,
+  AiSettingsInput,
+  AiSettingsView,
+  AiSummarizeRequest,
+  AiTestResult,
+  AiTextResult,
+  AiTranslateRequest,
   Annotation,
   AppInfo,
   CompressEstimate,
@@ -52,6 +63,33 @@ export const cancelJob = (jobId: string) => invoke<void>("cancel_job", { jobId }
 
 export const onProgress = (handler: (payload: ProgressPayload) => void): Promise<UnlistenFn> =>
   listen<ProgressPayload>("job:progress", (event) => handler(event.payload));
+
+// ---------------------------------------------------------------------------
+// AI (DeepSeek) - the only network feature, opt-in with the user's own key
+// ---------------------------------------------------------------------------
+
+export const aiGetSettings = () => invoke<AiSettingsView>("ai_get_settings");
+export const aiSaveSettings = (input: AiSettingsInput) => invoke<AiSettingsView>("ai_save_settings", { input });
+export const aiClearKey = () => invoke<AiSettingsView>("ai_clear_key");
+export const aiTestConnection = () => invoke<AiTestResult>("ai_test_connection");
+export const aiDocumentPreview = (path: string, pages: number[] | undefined, password?: string) =>
+  invoke<AiPreview>("ai_document_preview", { path, pages: pages ?? null, password: password || null });
+export const aiSummarize = (request: AiSummarizeRequest) => invoke<AiTextResult>("ai_summarize", { request });
+export const aiTranslate = (request: AiTranslateRequest) => invoke<AiTextResult>("ai_translate", { request });
+export const aiAsk = (request: AiAskRequest) => invoke<AiTextResult>("ai_ask", { request });
+export const aiCleanupText = (request: AiCleanupRequest) => invoke<AiTextResult>("ai_cleanup_text", { request });
+export const aiSuggestMetadata = (path: string, password: string | undefined, jobId: string) =>
+  invoke<AiMetadataSuggestion>("ai_suggest_metadata", { request: { path, password: password || null, jobId } });
+export const aiSaveOutput = (path: string, text: string, overwrite?: string) =>
+  invoke<string>("ai_save_output", { path, text, overwrite: overwrite ?? null });
+export const aiExamplePrompts = () => invoke<AiExamplePrompts>("ai_example_prompts");
+
+export const onAiChunk = (handler: (payload: { jobId: string; delta: string }) => void): Promise<UnlistenFn> =>
+  listen<{ jobId: string; delta: string }>("ai:chunk", (event) => handler(event.payload));
+
+export const onAiProgress = (
+  handler: (payload: { jobId: string; stage: string; current: number; total: number }) => void,
+): Promise<UnlistenFn> => listen("ai:progress", (event) => handler(event.payload as never));
 
 // ---------------------------------------------------------------------------
 // Inspection
@@ -106,7 +144,7 @@ export const logFrontend = (level: string, message: string) =>
   invoke<void>("log_frontend", { level, message }).catch(() => undefined);
 
 export const devLaunchContext = () =>
-  invoke<{ startScreen: string | null; files: string[] | null; autoRun: boolean }>("dev_launch_context");
+  invoke<{ startScreen: string | null; files: string[] | null; autoRun: boolean; tab: string | null }>("dev_launch_context");
 
 // ---------------------------------------------------------------------------
 // Operations

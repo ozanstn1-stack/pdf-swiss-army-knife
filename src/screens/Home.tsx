@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
   BookOpen,
+  Bot,
   Combine,
   FileImage,
   FileSearch,
@@ -58,6 +59,7 @@ export function Home({
   const cards: ToolCardSpec[] = useMemo(
     () => [
       { id: "reader", titleKey: "nav.reader", descKey: "reader.subtitle", icon: <BookOpen size={20} />, accent: true },
+      { id: "ai", titleKey: "nav.ai", descKey: "ai.subtitle", icon: <Bot size={20} />, accent: true },
       { id: "merge", titleKey: "nav.merge", descKey: "merge.subtitle", icon: <Combine size={20} />, accent: true },
       { id: "organize", titleKey: "nav.organize", descKey: "organize.subtitle", icon: <Layers size={20} /> },
       { id: "split", titleKey: "nav.split", descKey: "split.subtitle", icon: <Scissors size={20} /> },

@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
   BookOpen,
+  Bot,
   Combine,
   FileSearch,
   FolderClock,
@@ -31,6 +32,7 @@ import { devLaunchContext } from "./lib/api";
 import type { Navigate, ScreenId } from "./lib/nav";
 import { Home as HomeScreen } from "./screens/Home";
 import { Reader } from "./screens/Reader";
+import { Ai } from "./screens/Ai";
 import { Merge } from "./screens/Merge";
 import { Organize } from "./screens/Organize";
 import { Split } from "./screens/Split";
@@ -105,6 +107,7 @@ export default function App() {
           startScreen: context.startScreen,
           files: context.files,
           autoRun: Boolean(context.autoRun),
+          tab: context.tab,
         });
         void import("./lib/api").then(({ logFrontend }) =>
           logFrontend("info", `dev-context: screen=${context.startScreen} files=${(context.files ?? []).length} autoRun=${context.autoRun}`),
@@ -205,6 +208,7 @@ export default function App() {
     () => ({
       home: <HomeScreen onNavigate={navigate} onDropFiles={homeDrop} dragging={dragging} onFileList={setFiles} />,
       reader: <Reader initialFiles={files} dragging={dragging} />,
+      ai: <Ai initialFiles={files} dragging={dragging} />,
       merge: <Merge initialFiles={files} dragging={dragging} />,
       organize: <Organize initialFiles={files} dragging={dragging} />,
       split: <Split initialFiles={files} dragging={dragging} />,
@@ -261,6 +265,10 @@ export default function App() {
         { id: "protect", label: t("nav.protect"), icon: <Lock size={16} /> },
         { id: "unlock", label: t("nav.unlock"), icon: <LockOpen size={16} /> },
       ],
+    },
+    {
+      label: t("nav.ai"),
+      items: [{ id: "ai", label: t("nav.ai"), icon: <Bot size={16} /> }],
     },
     {
       label: t("nav.batch"),

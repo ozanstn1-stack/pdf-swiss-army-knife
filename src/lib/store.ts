@@ -173,14 +173,16 @@ interface DevState {
   startScreen: string | null;
   files: string[] | null;
   autoRun: boolean;
-  set: (context: { startScreen: string | null; files: string[] | null; autoRun: boolean }) => void;
+  tab: string | null;
+  set: (context: { startScreen: string | null; files: string[] | null; autoRun: boolean; tab?: string | null }) => void;
 }
 
 export const useDev = create<DevState>((set) => ({
   startScreen: null,
   files: null,
   autoRun: false,
-  set: (context) => set(context),
+  tab: null,
+  set: (context) => set({ ...context, tab: context.tab ?? null }),
 }));
 
 // ---------------------------------------------------------------------------
