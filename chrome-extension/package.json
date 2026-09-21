@@ -12,6 +12,7 @@
     "preview": "vite preview --port 4173",
     "package": "node scripts/package.mjs",
     "selftest:browser": "node scripts/browser-selftest.mjs",
+    "verify": "node scripts/verify-package.mjs",
     "test:all": "npm run test && npm run build && npm run selftest:browser"
   },
   "dependencies": {

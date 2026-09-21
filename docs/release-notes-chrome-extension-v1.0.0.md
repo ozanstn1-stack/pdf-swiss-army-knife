@@ -32,13 +32,17 @@ OCR, password protect/unlock, page size/crop, annotations, batch processing. The
 
 Works in any Chromium-based browser (Chrome, Edge, Brave, …) with Manifest V3 support.
 
+> Note: Chrome 137+ removed the `--load-extension` command-line flag, so unpacked extensions can only be loaded through `chrome://extensions` — that is why the installation step above is manual. Everything else in this release is verified automatically (see below).
+
 ## Verification
 
 - **10 Node integration tests** (`npm test`) over the shared operation modules: merge order, extract/delete/reorder/rotate, split modes, metadata, numbering text, Unicode watermark text, images → PDF, lossless compression, encryption refusal.
 - **11 in-browser checks** executed in real Chrome (`npm run selftest:browser`): parsing, canvas rendering with ink detection, text extraction, text search, merge, rotation/extraction, page numbering labels, watermark font embedding, compression, canvas → PDF, encrypted input refusal.
+- **Package verification** (`npm run verify`): MV3 manifest shape, no host permissions, all referenced assets present (worker, fonts, cmaps, standard fonts), and **zero remote references** in the bundle.
 
 ```
 11/11 checks passed · SELFTEST_RESULT=OK
+All checks passed: MV3 manifest, no host permissions, no remote code, all assets bundled.
 ```
 
 ## Privacy
