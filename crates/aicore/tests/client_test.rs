@@ -108,6 +108,7 @@ async fn chat_stream_assembles_server_sent_events() {
             ChatOptions::default(),
             &cancel,
             &mut |delta| deltas.push_str(delta),
+            &mut |_| {},
         )
         .await
         .expect("stream");
@@ -163,10 +164,159 @@ async fn cancellation_stops_the_stream() {
     let cancel = CancelToken::new();
     cancel.cancel();
     let result = client
-        .chat_stream(&[ChatMessage::user("hi")], ChatOptions::default(), &cancel, &mut |_| {})
+        .chat_stream(&[ChatMessage::user("hi")], ChatOptions::default(), &cancel, &mut |_| {}, &mut |_| {})
         .await;
     assert!(matches!(result, Err(AiError::Cancelled)));
     handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn reasoning_only_streams_return_the_thinking_trace() {
+    // Thinking mode can consume the whole token budget before any answer
+    // text arrives; the client must not fail with an empty response.
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me \"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think about this.\"}}]}\n\n",
+        "data: [DONE]\n\n"
+    )
+    .to_string();
+    let (url, handle) = mock_server(200, "text/event-stream", body, true);
+    let client = client_for(url);
+    let cancel = CancelToken::new();
+    let mut reasoning = String::new();
+    let mut answer = String::new();
+    let full = client
+        .chat_stream(
+            &[ChatMessage::user("hi")],
+            ChatOptions::default(),
+            &cancel,
+            &mut |delta| answer.push_str(delta),
+            &mut |delta| reasoning.push_str(delta),
+        )
+        .await
+        .expect("reasoning-only stream must succeed");
+    assert_eq!(full, "Let me think about this.");
+    assert_eq!(reasoning, "Let me think about this.");
+    assert!(answer.is_empty());
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn thinking_deltas_are_reported_separately_from_the_answer() {
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"checking numbers...\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Total is 1200 EUR.\"}}]}\n\n",
+        "data: [DONE]\n\n"
+    )
+    .to_string();
+    let (url, handle) = mock_server(200, "text/event-stream", body, true);
+    let client = client_for(url);
+    let cancel = CancelToken::new();
+    let mut reasoning = String::new();
+    let mut answer = String::new();
+    let full = client
+        .chat_stream(
+            &[ChatMessage::user("total?")],
+            ChatOptions::default(),
+            &cancel,
+            &mut |delta| answer.push_str(delta),
+            &mut |delta| reasoning.push_str(delta),
+        )
+        .await
+        .expect("stream");
+    assert_eq!(full, "Total is 1200 EUR.");
+    assert_eq!(answer, "Total is 1200 EUR.");
+    assert_eq!(reasoning, "checking numbers...");
+    handle.join().unwrap();
+}
+
+#[test]
+fn thinking_parameters_only_apply_to_v4_models() {
+    assert!(aicore::supports_thinking("deepseek-v4-flash"));
+    assert!(aicore::supports_thinking("deepseek-v4-pro"));
+    assert!(!aicore::supports_thinking("deepseek-chat"));
+    assert!(!aicore::supports_thinking("llama3.1:8b"));
+    let config = AiConfig {
+        api_key: "k".into(),
+        model: "deepseek-v4-flash".into(),
+        ..Default::default()
+    };
+    assert!(config.thinking);
+    assert_eq!(config.reasoning_effort, "high");
+}
+
+#[tokio::test]
+async fn thinking_fields_are_sent_to_v4_models_and_omitted_otherwise() {
+    // The mock echoes the received request body via the reasoning channel, so
+    // the test can inspect what the client actually sent.
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let captured_clone = captured.clone();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let request = read_request(&mut stream);
+            let body = request.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+            *captured_clone.lock().unwrap() = body;
+            let reply = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(header.as_bytes());
+            for line in reply.split_inclusive('\n') {
+                let frame = format!("{:x}\r\n{}\r\n", line.len(), line);
+                let _ = stream.write_all(frame.as_bytes());
+            }
+            let _ = stream.write_all(b"0\r\n\r\n");
+            let _ = stream.flush();
+        }
+    });
+
+    let client = client_for(format!("http://{address}"));
+    let cancel = CancelToken::new();
+    client
+        .chat_stream(&[ChatMessage::user("hi")], ChatOptions::default(), &cancel, &mut |_| {}, &mut |_| {})
+        .await
+        .expect("v4 stream");
+    handle.join().unwrap();
+    let body = captured.lock().unwrap().clone();
+    assert!(body.contains("\"thinking\":{\"type\":\"enabled\"}"), "thinking missing in {body}");
+    assert!(body.contains("\"reasoning_effort\":\"high\""), "effort missing in {body}");
+
+    // A legacy model must not receive the V4-only fields.
+    let captured2 = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let captured2_clone = captured2.clone();
+    let listener2 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address2 = listener2.local_addr().unwrap();
+    let handle2 = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener2.accept() {
+            let request = read_request(&mut stream);
+            let body = request.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+            *captured2_clone.lock().unwrap() = body;
+            let reply = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(header.as_bytes());
+            for line in reply.split_inclusive('\n') {
+                let frame = format!("{:x}\r\n{}\r\n", line.len(), line);
+                let _ = stream.write_all(frame.as_bytes());
+            }
+            let _ = stream.write_all(b"0\r\n\r\n");
+            let _ = stream.flush();
+        }
+    });
+    let legacy = DeepSeekClient::new(AiConfig {
+        api_key: "k".into(),
+        base_url: format!("http://{address2}"),
+        model: "deepseek-chat".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    legacy
+        .chat_stream(&[ChatMessage::user("hi")], ChatOptions::default(), &cancel, &mut |_| {}, &mut |_| {})
+        .await
+        .expect("legacy stream");
+    handle2.join().unwrap();
+    let body2 = captured2.lock().unwrap().clone();
+    assert!(!body2.contains("thinking"), "legacy model must not receive thinking: {body2}");
+    assert!(!body2.contains("reasoning_effort"), "legacy model must not receive effort: {body2}");
 }
 
 #[test]

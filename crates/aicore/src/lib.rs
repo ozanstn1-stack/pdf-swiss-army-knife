@@ -44,6 +44,21 @@ pub struct AiConfig {
     pub temperature: f32,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// DeepSeek V4 thinking mode ("thinking": {"type": "enabled"|"disabled"}).
+    /// Ignored for models that are not DeepSeek V4.
+    #[serde(default = "default_thinking")]
+    pub thinking: bool,
+    /// "low" | "high" | "max" (DeepSeek maps medium/xhigh to high).
+    #[serde(default = "default_reasoning_effort")]
+    pub reasoning_effort: String,
+}
+
+fn default_thinking() -> bool {
+    true
+}
+
+fn default_reasoning_effort() -> String {
+    "high".to_string()
 }
 
 fn default_base_url() -> String {
@@ -67,8 +82,16 @@ impl Default for AiConfig {
             model: default_model(),
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),
+            thinking: default_thinking(),
+            reasoning_effort: default_reasoning_effort(),
         }
     }
+}
+
+/// DeepSeek V4 models accept the `thinking` and `reasoning_effort` fields;
+/// other (legacy or third-party) models would reject or misuse them.
+pub fn supports_thinking(model: &str) -> bool {
+    model.trim().to_lowercase().starts_with("deepseek-v4")
 }
 
 impl AiConfig {
@@ -153,6 +176,12 @@ pub struct ChatOptions {
     pub max_tokens: Option<u32>,
 }
 
+#[derive(Debug, Serialize, Default)]
+struct ThinkingSetting {
+    #[serde(rename = "type")]
+    kind: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ChatRequestBody<'a> {
     model: &'a str,
@@ -160,6 +189,35 @@ struct ChatRequestBody<'a> {
     temperature: f32,
     max_tokens: u32,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingSetting>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'a str>,
+}
+
+impl<'a> ChatRequestBody<'a> {
+    fn new(config: &'a AiConfig, messages: &'a [ChatMessage], options: &ChatOptions, stream: bool) -> Self {
+        let enable_thinking = supports_thinking(&config.model);
+        Self {
+            model: &config.model,
+            messages,
+            temperature: options.temperature.unwrap_or(config.temperature),
+            max_tokens: options.max_tokens.unwrap_or(config.max_tokens),
+            stream,
+            thinking: if enable_thinking {
+                Some(ThinkingSetting {
+                    kind: if config.thinking { "enabled" } else { "disabled" }.to_string(),
+                })
+            } else {
+                None
+            },
+            reasoning_effort: if enable_thinking && config.thinking {
+                Some(config.reasoning_effort.trim())
+            } else {
+                None
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +234,24 @@ struct ChatChoice {
 struct ChatMessageContent {
     #[serde(default)]
     content: String,
+    /// Present while (and when) the model is in thinking mode.
+    #[serde(default)]
+    reasoning_content: String,
+}
+
+impl ChatMessageContent {
+    /// Content when available, otherwise the reasoning trace - a response
+    /// that only contains reasoning (for example when max_tokens ran out
+    /// while thinking) is still better than an error.
+    fn text(&self) -> Option<String> {
+        if !self.content.trim().is_empty() {
+            return Some(self.content.clone());
+        }
+        if !self.reasoning_content.trim().is_empty() {
+            return Some(self.reasoning_content.clone());
+        }
+        None
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,6 +268,8 @@ struct StreamChoice {
 struct StreamDelta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,13 +320,7 @@ impl DeepSeekClient {
 
     /// Non-streaming completion (used for tests and short tasks).
     pub async fn chat(&self, messages: &[ChatMessage], options: ChatOptions) -> AiResult<String> {
-        let body = ChatRequestBody {
-            model: &self.config.model,
-            messages,
-            temperature: options.temperature.unwrap_or(self.config.temperature),
-            max_tokens: options.max_tokens.unwrap_or(self.config.max_tokens),
-            stream: false,
-        };
+        let body = ChatRequestBody::new(&self.config, messages, &options, false);
         let response = self
             .http
             .post(self.endpoint())
@@ -268,27 +340,22 @@ impl DeepSeekClient {
             .choices
             .into_iter()
             .next()
-            .map(|choice| choice.message.content)
-            .filter(|content| !content.trim().is_empty())
+            .and_then(|choice| choice.message.text())
             .ok_or(AiError::InvalidResponse)
     }
 
-    /// Streaming completion: `on_delta` receives incremental text so the UI can
-    /// render the answer while it is being produced.
+    /// Streaming completion: `on_delta` receives incremental answer text and
+    /// `on_reasoning` the thinking trace (when the model is in thinking mode),
+    /// so the UI can render both while they are produced.
     pub async fn chat_stream(
         &self,
         messages: &[ChatMessage],
         options: ChatOptions,
         cancel: &CancelToken,
         on_delta: &mut (dyn FnMut(&str) + Send),
+        on_reasoning: &mut (dyn FnMut(&str) + Send),
     ) -> AiResult<String> {
-        let body = ChatRequestBody {
-            model: &self.config.model,
-            messages,
-            temperature: options.temperature.unwrap_or(self.config.temperature),
-            max_tokens: options.max_tokens.unwrap_or(self.config.max_tokens),
-            stream: true,
-        };
+        let body = ChatRequestBody::new(&self.config, messages, &options, true);
         let response = self
             .http
             .post(self.endpoint())
@@ -306,6 +373,7 @@ impl DeepSeekClient {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
         let mut full = String::new();
+        let mut reasoning_text = String::new();
         while let Some(chunk) = stream.next().await {
             cancel.check()?;
             let bytes = chunk.map_err(|_| AiError::Network)?;
@@ -322,21 +390,30 @@ impl DeepSeekClient {
                     continue;
                 }
                 if let Ok(parsed) = serde_json::from_str::<StreamChunk>(payload) {
-                    if let Some(content) = parsed
-                        .choices
-                        .into_iter()
-                        .next()
-                        .and_then(|choice| choice.delta.content)
-                    {
-                        if !content.is_empty() {
-                            full.push_str(&content);
-                            on_delta(&content);
+                    if let Some(choice) = parsed.choices.into_iter().next() {
+                        if let Some(reasoning) = choice.delta.reasoning_content {
+                            if !reasoning.is_empty() {
+                                reasoning_text.push_str(&reasoning);
+                                on_reasoning(&reasoning);
+                            }
+                        }
+                        if let Some(content) = choice.delta.content {
+                            if !content.is_empty() {
+                                full.push_str(&content);
+                                on_delta(&content);
+                            }
                         }
                     }
                 }
             }
         }
         if full.trim().is_empty() {
+            // Thinking mode can consume the whole budget before any answer
+            // text is produced; returning the reasoning trace is more useful
+            // than failing with "unexpected response".
+            if !reasoning_text.trim().is_empty() {
+                return Ok(reasoning_text);
+            }
             return Err(AiError::InvalidResponse);
         }
         Ok(full)
@@ -390,11 +467,14 @@ pub async fn run_plan(
     cancel: &CancelToken,
     on_progress: &mut (dyn FnMut(&str, usize, usize) + Send),
     on_delta: &mut (dyn FnMut(&str) + Send),
+    on_reasoning: &mut (dyn FnMut(&str) + Send),
 ) -> AiResult<String> {
     match plan {
         Plan::Single { messages } => {
             on_progress("request", 0, 1);
-            let text = client.chat_stream(messages, ChatOptions::default(), cancel, on_delta).await?;
+            let text = client
+                .chat_stream(messages, ChatOptions::default(), cancel, on_delta, on_reasoning)
+                .await?;
             on_progress("request", 1, 1);
             Ok(text)
         }
@@ -426,7 +506,7 @@ pub async fn run_plan(
                 ChatMessage::user(format!("{}\n\n{}", reduce, combined)),
             ];
             let final_text = client
-                .chat_stream(&messages, ChatOptions::default(), cancel, on_delta)
+                .chat_stream(&messages, ChatOptions::default(), cancel, on_delta, on_reasoning)
                 .await?;
             on_progress("reduce", total, total);
             Ok(final_text)
