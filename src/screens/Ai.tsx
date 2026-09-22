@@ -3,6 +3,7 @@ import {
   BookOpenCheck,
   Bot,
   Check,
+  Brain,
   Copy,
   Languages,
   ListChecks,
@@ -59,11 +60,13 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
   const [preview, setPreview] = useState<AiPreview | null>(null);
   const [consent, setConsent] = useState(false);
   const [output, setOutput] = useState("");
+  const [reasoning, setReasoning] = useState("");
   const [running, setRunning] = useState(false);
   const [stage, setStage] = useState<{ stage: string; current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [metadataSuggestion, setMetadataSuggestion] = useState<AiMetadataSuggestion | null>(null);
   const [metadataResult, setMetadataResult] = useState<OpResult | null>(null);
+  const [showReasoning, setShowReasoning] = useState(false);
   const [summaryOptions, setSummaryOptions] = useState({
     language: "auto",
     length: "medium" as SummaryLength,
@@ -95,7 +98,11 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
     let unlistenProgress: (() => void) | undefined;
     void onAiChunk((payload) => {
       if (payload.jobId !== jobId.current) return;
-      setOutput((previous) => previous + payload.delta);
+      if (payload.kind === "reasoning") {
+        setReasoning((previous) => previous + payload.delta);
+      } else {
+        setOutput((previous) => previous + payload.delta);
+      }
     }).then((fn) => {
       unlistenChunk = fn;
     });
@@ -151,6 +158,7 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
   const resetJob = () => {
     jobId.current = uid("ai");
     setStage(null);
+    setReasoning("");
   };
 
   // Development automation (PDFSAK_DEV_RUN=1) runs the active tab once ready.
@@ -595,6 +603,17 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
                   ) : null}
                 </Card>
 
+                {reasoning && !output ? (
+                  <Card className="p-4 flex flex-col gap-2">
+                    <p className="font-semibold text-[13.5px] flex items-center gap-2">
+                      <Brain size={15} /> {t("ai.thinkingTitle")}
+                      {running ? <Spinner size={13} /> : null}
+                    </p>
+                    <p className="text-xs muted">{t("ai.thinkingHint")}</p>
+                    <div className="card-soft p-3 max-h-[220px] overflow-y-auto whitespace-pre-wrap text-[12.5px] muted italic">{reasoning}</div>
+                  </Card>
+                ) : null}
+
                 {output ? (
                   <Card className="p-4 flex flex-col gap-2">
                     <div className="flex items-center justify-between">
@@ -611,6 +630,18 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
                         </Button>
                       </div>
                     </div>
+                    {reasoning ? (
+                      <div className="text-xs">
+                        <button className="btn btn-sm btn-ghost" onClick={() => setShowReasoning((previous) => !previous)}>
+                          <Brain size={13} /> {showReasoning ? t("ai.hideThinking") : t("ai.showThinking")}
+                        </button>
+                        {showReasoning ? (
+                          <div className="card-soft p-3 mt-2 max-h-[200px] overflow-y-auto whitespace-pre-wrap muted italic text-[12.5px]">
+                            {reasoning}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div ref={outputRef} className="card-soft p-3 max-h-[420px] overflow-y-auto whitespace-pre-wrap text-[13.5px] leading-relaxed">
                       {output}
                     </div>

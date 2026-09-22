@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Bot, CheckCircle2, KeyRound, ShieldAlert, Trash2, Zap } from "lucide-react";
-import { Badge, Button, Card, Field, Slider, Spinner, TextInput } from "./ui";
+import { Badge, Button, Card, Checkbox, Field, Segmented, Slider, Spinner, TextInput } from "./ui";
 import { useT } from "../lib/i18n";
 import { aiClearKey, aiGetSettings, aiModels, aiSaveSettings, aiTestConnection } from "../lib/api";
-import type { AiModelOption, AiSettingsView, AiTestResult } from "../lib/types";
+import type { AiModelOption, AiSettingsView, AiTestResult, ReasoningEffort } from "../lib/types";
 
 /**
  * Settings panel for the optional DeepSeek integration.
@@ -21,6 +21,8 @@ export function AiSettings() {
   const [models, setModels] = useState<AiModelOption[]>([]);
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(4096);
+  const [thinking, setThinking] = useState(true);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AiTestResult | null>(null);
@@ -36,9 +38,13 @@ export function AiSettings() {
         setModel(settings.model);
         setTemperature(settings.temperature);
         setMaxTokens(settings.maxTokens);
+        setThinking(settings.thinking);
+        setReasoningEffort((settings.reasoningEffort as ReasoningEffort) ?? "high");
       })
       .catch(() => undefined);
   }, []);
+
+  const isV4Model = model.trim().toLowerCase().startsWith("deepseek-v4");
 
   const save = async () => {
     setSaving(true);
@@ -49,6 +55,8 @@ export function AiSettings() {
         model,
         temperature,
         maxTokens,
+        thinking,
+        reasoningEffort,
       });
       setView(updated);
       setApiKey("");
@@ -143,6 +151,29 @@ export function AiSettings() {
         <Field label={t("settings.aiMaxTokens")}>
           <Slider value={maxTokens} min={512} max={8192} step={256} onChange={setMaxTokens} />
         </Field>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Checkbox
+          checked={thinking}
+          onChange={setThinking}
+          label={t("settings.aiThinking")}
+        />
+        <p className="text-xs muted -mt-1">{t("settings.aiThinkingHint")}</p>
+        {thinking ? (
+          <Field label={t("settings.aiReasoningEffort")} hint={t("settings.aiReasoningEffortHint")}>
+            <Segmented<ReasoningEffort>
+              value={reasoningEffort}
+              onChange={setReasoningEffort}
+              options={[
+                { value: "low", label: t("settings.aiEffortLow") },
+                { value: "high", label: t("settings.aiEffortHigh") },
+                { value: "max", label: t("settings.aiEffortMax") },
+              ]}
+            />
+          </Field>
+        ) : null}
+        {!isV4Model ? <p className="text-xs" style={{ color: "var(--warn)" }}>{t("settings.aiThinkingModelWarning")}</p> : null}
       </div>
 
       <div className="flex items-center gap-2">

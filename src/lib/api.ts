@@ -86,8 +86,10 @@ export const aiSaveOutput = (path: string, text: string, overwrite?: string) =>
 export const aiExamplePrompts = () => invoke<AiExamplePrompts>("ai_example_prompts");
 export const aiModels = () => invoke<AiModelOption[]>("ai_models");
 
-export const onAiChunk = (handler: (payload: { jobId: string; delta: string }) => void): Promise<UnlistenFn> =>
-  listen<{ jobId: string; delta: string }>("ai:chunk", (event) => handler(event.payload));
+export const onAiChunk = (
+  handler: (payload: { jobId: string; delta: string; kind: "content" | "reasoning" }) => void,
+): Promise<UnlistenFn> =>
+  listen<{ jobId: string; delta: string; kind: "content" | "reasoning" }>("ai:chunk", (event) => handler(event.payload));
 
 export const onAiProgress = (
   handler: (payload: { jobId: string; stage: string; current: number; total: number }) => void,

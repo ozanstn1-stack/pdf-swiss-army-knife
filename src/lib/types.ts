@@ -315,6 +315,8 @@ export interface TranslateOptions {
   bilingual: boolean;
 }
 
+export type ReasoningEffort = "low" | "high" | "max";
+
 export interface AiSettingsView {
   configured: boolean;
   keyStorage: "none" | "dpapi" | "plain" | string;
@@ -323,6 +325,8 @@ export interface AiSettingsView {
   model: string;
   temperature: number;
   maxTokens: number;
+  thinking: boolean;
+  reasoningEffort: ReasoningEffort | string;
 }
 
 export interface AiSettingsInput {
@@ -331,6 +335,8 @@ export interface AiSettingsInput {
   model: string;
   temperature: number;
   maxTokens: number;
+  thinking?: boolean;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface AiTestResult {
