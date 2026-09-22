@@ -66,6 +66,7 @@ How it stays honest:
 - **What is sent:** only the extracted text of the document you chose (page count and character count are shown before you run). Never the file, never passwords, never metadata you did not ask for.
 - **Key storage:** the API key is encrypted with **Windows DPAPI** (`CryptProtectData`), so only your Windows account on that machine can decrypt it. It is never logged.
 - **Any OpenAI-compatible endpoint works.** Point the base URL at a local server (Ollama, LM Studio, llama.cpp) and the AI features stay entirely offline.
+- **Model selection:** the default is **`deepseek-v4-flash`** (DeepSeek V4 Flash, the fast model); Settings offers `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-v4-pro` and the legacy `deepseek-chat` / `deepseek-reasoner` aliases, plus a free-text field for any other model id. Note that DeepSeek's `deepseek-v4-flash` alias currently serves DeepSeek-V4-Flash-0731.
 - Failures are reported with clear codes: missing key, rejected key, rate limit, insufficient balance, network unreachable, no text layer (run OCR first), context too large.
 
 ### Reading mode
