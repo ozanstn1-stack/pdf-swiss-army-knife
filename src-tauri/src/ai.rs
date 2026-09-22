@@ -680,6 +680,27 @@ pub fn ai_save_output(
     Ok(target.display().to_string())
 }
 
+/// Model ids offered in the settings dropdown (id + human label).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelOption {
+    pub id: String,
+    pub label: String,
+    pub recommended: bool,
+}
+
+#[tauri::command]
+pub fn ai_models() -> Vec<AiModelOption> {
+    aicore::SUGGESTED_MODELS
+        .iter()
+        .map(|(id, label)| AiModelOption {
+            id: (*id).to_string(),
+            label: (*label).to_string(),
+            recommended: *id == aicore::DEFAULT_MODEL,
+        })
+        .collect()
+}
+
 /// Also referenced by the UI to know if AI features are worth showing.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

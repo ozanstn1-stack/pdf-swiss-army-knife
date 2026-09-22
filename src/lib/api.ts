@@ -5,6 +5,7 @@ import type {
   AiCleanupRequest,
   AiExamplePrompts,
   AiMetadataSuggestion,
+  AiModelOption,
   AiPreview,
   AiSettingsInput,
   AiSettingsView,
@@ -83,6 +84,7 @@ export const aiSuggestMetadata = (path: string, password: string | undefined, jo
 export const aiSaveOutput = (path: string, text: string, overwrite?: string) =>
   invoke<string>("ai_save_output", { path, text, overwrite: overwrite ?? null });
 export const aiExamplePrompts = () => invoke<AiExamplePrompts>("ai_example_prompts");
+export const aiModels = () => invoke<AiModelOption[]>("ai_models");
 
 export const onAiChunk = (handler: (payload: { jobId: string; delta: string }) => void): Promise<UnlistenFn> =>
   listen<{ jobId: string; delta: string }>("ai:chunk", (event) => handler(event.payload));

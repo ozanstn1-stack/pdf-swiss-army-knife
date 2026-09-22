@@ -123,6 +123,7 @@ pub fn run() {
             ai::ai_cancel,
             ai::ai_save_output,
             ai::ai_example_prompts,
+            ai::ai_models,
             commands::log_frontend,
         ])
         .run(tauri::generate_context!())

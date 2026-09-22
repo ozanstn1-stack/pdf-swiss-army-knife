@@ -361,6 +361,12 @@ export interface AiMetadataSuggestion {
   keywords: string[];
 }
 
+export interface AiModelOption {
+  id: string;
+  label: string;
+  recommended: boolean;
+}
+
 export interface AiExamplePrompts {
   summarize: string[];
   ask: string[];

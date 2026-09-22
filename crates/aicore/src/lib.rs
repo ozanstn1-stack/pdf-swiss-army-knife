@@ -19,7 +19,18 @@ pub mod prompts;
 pub use prompts::{chunk_text, Plan};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
-pub const DEFAULT_MODEL: &str = "deepseek-chat";
+pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
+
+/// Model ids offered by the DeepSeek platform (chat completions).
+/// `deepseek-v4-flash` currently serves DeepSeek-V4-Flash-0731; older aliases
+/// are kept for accounts that still use them.
+pub const SUGGESTED_MODELS: &[(&str, &str)] = &[
+    ("deepseek-v4-flash", "DeepSeek V4 Flash (fast, recommended)"),
+    ("deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision (experimental, image input)"),
+    ("deepseek-v4-pro", "DeepSeek V4 Pro (highest quality, slower)"),
+    ("deepseek-chat", "deepseek-chat (legacy alias)"),
+    ("deepseek-reasoner", "deepseek-reasoner (legacy reasoning alias)"),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

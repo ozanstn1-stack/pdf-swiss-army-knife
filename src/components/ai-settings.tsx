@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Bot, CheckCircle2, KeyRound, ShieldAlert, Trash2, Zap } from "lucide-react";
 import { Badge, Button, Card, Field, Slider, Spinner, TextInput } from "./ui";
 import { useT } from "../lib/i18n";
-import { aiClearKey, aiGetSettings, aiSaveSettings, aiTestConnection } from "../lib/api";
-import type { AiSettingsView, AiTestResult } from "../lib/types";
+import { aiClearKey, aiGetSettings, aiModels, aiSaveSettings, aiTestConnection } from "../lib/api";
+import type { AiModelOption, AiSettingsView, AiTestResult } from "../lib/types";
 
 /**
  * Settings panel for the optional DeepSeek integration.
@@ -17,7 +17,8 @@ export function AiSettings() {
   const [view, setView] = useState<AiSettingsView | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
-  const [model, setModel] = useState("deepseek-chat");
+  const [model, setModel] = useState("deepseek-v4-flash");
+  const [models, setModels] = useState<AiModelOption[]>([]);
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(4096);
   const [saving, setSaving] = useState(false);
@@ -25,6 +26,9 @@ export function AiSettings() {
   const [testResult, setTestResult] = useState<AiTestResult | null>(null);
 
   useEffect(() => {
+    void aiModels()
+      .then(setModels)
+      .catch(() => undefined);
     void aiGetSettings()
       .then((settings) => {
         setView(settings);
@@ -104,8 +108,31 @@ export function AiSettings() {
         <Field label={t("settings.aiBaseUrl")} hint={t("settings.aiBaseUrlHint")}>
           <TextInput value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} spellCheck={false} />
         </Field>
-        <Field label={t("settings.aiModel")}>
-          <TextInput value={model} onChange={(event) => setModel(event.target.value)} spellCheck={false} />
+        <Field label={t("settings.aiModel")} hint={t("settings.aiModelHint")}>
+          <div className="flex flex-col gap-2">
+            <select
+              className="select"
+              value={models.some((option) => option.id === model) ? model : "__custom"}
+              onChange={(event) => {
+                if (event.target.value !== "__custom") setModel(event.target.value);
+              }}
+            >
+              {models.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.id} — {option.label}
+                </option>
+              ))}
+              <option value="__custom">{t("settings.aiModelCustom")}</option>
+            </select>
+            {!models.some((option) => option.id === model) ? (
+              <TextInput
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                spellCheck={false}
+                placeholder="deepseek-v4-flash"
+              />
+            ) : null}
+          </div>
         </Field>
       </div>
 
