@@ -1244,6 +1244,167 @@ pub fn log_frontend(app: AppHandle, level: String, message: String) {
 }
 
 // ---------------------------------------------------------------------------
+// AI library and operation log (persistent stores)
+// ---------------------------------------------------------------------------
+
+use crate::library::{self, AiLibraryEntry, OperationEntry};
+
+fn ai_library_index(app: &AppHandle) -> Result<PathBuf, PdfError> {
+    Ok(config_dir(app)?.join("ai-library.json"))
+}
+
+fn operations_log(app: &AppHandle) -> Result<PathBuf, PdfError> {
+    Ok(config_dir(app)?.join("operations.json"))
+}
+
+/// Default AI library folder: Documents/PDF Swiss Army Knife AI.
+fn default_library_dir(app: &AppHandle) -> PathBuf {
+    app.path()
+        .document_dir()
+        .map(|dir| dir.join("PDF Swiss Army Knife AI"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("pdfsak-ai-library"))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAiEntryRequest {
+    pub kind: String,
+    pub source_path: String,
+    pub source_name: String,
+    pub model: String,
+    pub pages: u32,
+    pub characters: u64,
+    #[serde(default)]
+    pub options: String,
+    pub text: String,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Overrides the default library folder for this save.
+    #[serde(default)]
+    pub directory: Option<String>,
+}
+
+/// Stores an AI result as Markdown plus an index entry (auto-save and the
+/// explicit "save to library" action both use this).
+#[tauri::command]
+pub fn ai_library_save(app: AppHandle, request: SaveAiEntryRequest) -> Result<AiLibraryEntry, PdfError> {
+    let index = ai_library_index(&app)?;
+    let dir = request
+        .directory
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| default_library_dir(&app));
+    library::save_ai_entry(
+        &index,
+        &dir,
+        &request.kind,
+        &request.source_path,
+        &request.source_name,
+        &request.model,
+        request.pages,
+        request.characters,
+        &request.options,
+        &request.text,
+        request.elapsed_ms,
+    )
+}
+
+#[tauri::command]
+pub fn ai_library_list(app: AppHandle) -> Result<Vec<AiLibraryEntry>, PdfError> {
+    Ok(library::list_ai_entries(&ai_library_index(&app)?))
+}
+
+#[tauri::command]
+pub fn ai_library_text(app: AppHandle, id: String) -> Result<String, PdfError> {
+    library::read_ai_entry_text(&ai_library_index(&app)?, &id)
+}
+
+#[tauri::command]
+pub fn ai_library_delete(app: AppHandle, id: String, delete_file: Option<bool>) -> Result<Vec<AiLibraryEntry>, PdfError> {
+    let index = ai_library_index(&app)?;
+    library::delete_ai_entry(&index, &id, delete_file.unwrap_or(true))?;
+    Ok(library::list_ai_entries(&index))
+}
+
+#[tauri::command]
+pub fn ai_library_clear(app: AppHandle, delete_files: Option<bool>) -> Result<(), PdfError> {
+    library::clear_ai_entries(&ai_library_index(&app)?, delete_files.unwrap_or(true))
+}
+
+/// Copies a stored result to a user-chosen path (Save as...).
+#[tauri::command]
+pub fn ai_library_export(app: AppHandle, id: String, target: String) -> Result<String, PdfError> {
+    let text = library::read_ai_entry_text(&ai_library_index(&app)?, &id)?;
+    let path = pdfcore::docutil::resolve_output_path(
+        Path::new(&target),
+        pdfcore::docutil::OverwritePolicy::UniqueName,
+    )?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(PdfError::from_io)?;
+        }
+    }
+    std::fs::write(&path, text).map_err(PdfError::from_io)?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+pub fn ai_library_default_dir(app: AppHandle) -> String {
+    default_library_dir(&app).display().to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationLogRequest {
+    pub operation: String,
+    pub input_path: String,
+    #[serde(default)]
+    pub output_path: String,
+    #[serde(default)]
+    pub page_count: Option<u32>,
+    #[serde(default)]
+    pub input_bytes: Option<u64>,
+    #[serde(default)]
+    pub output_bytes: Option<u64>,
+    #[serde(default = "default_true")]
+    pub ok: bool,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+#[tauri::command]
+pub fn log_operation(app: AppHandle, entry: OperationLogRequest) -> Result<(), PdfError> {
+    library::append_operation(
+        &operations_log(&app)?,
+        OperationEntry {
+            id: String::new(),
+            created_at: 0,
+            operation: entry.operation,
+            input_path: entry.input_path,
+            output_path: entry.output_path,
+            page_count: entry.page_count,
+            input_bytes: entry.input_bytes,
+            output_bytes: entry.output_bytes,
+            ok: entry.ok,
+            detail: entry.detail,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn load_operations(app: AppHandle) -> Vec<OperationEntry> {
+    operations_log(&app)
+        .map(|path| library::list_operations(&path))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn clear_operations(app: AppHandle) -> Result<(), PdfError> {
+    library::clear_operations(&operations_log(&app)?)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers for the async command wrappers
 // ---------------------------------------------------------------------------
 

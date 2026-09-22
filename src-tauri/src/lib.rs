@@ -5,6 +5,7 @@
 
 mod ai;
 mod commands;
+mod library;
 mod jobs;
 mod secret;
 
@@ -124,6 +125,16 @@ pub fn run() {
             ai::ai_save_output,
             ai::ai_example_prompts,
             ai::ai_models,
+            commands::ai_library_save,
+            commands::ai_library_list,
+            commands::ai_library_text,
+            commands::ai_library_delete,
+            commands::ai_library_clear,
+            commands::ai_library_export,
+            commands::ai_library_default_dir,
+            commands::log_operation,
+            commands::load_operations,
+            commands::clear_operations,
             commands::log_frontend,
         ])
         .run(tauri::generate_context!())
