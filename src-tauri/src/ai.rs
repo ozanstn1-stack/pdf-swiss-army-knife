@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-const MAX_PAGES_FOR_CONTEXT: u32 = 400;
+/// Safety cap for pathological documents; the real limit is the configured
+/// context budget (up to 1M tokens).
+const MAX_PAGES_FOR_CONTEXT: u32 = 2_000;
 const MIN_TEXT_CHARS: usize = 20;
 
 fn ai_error(error: AiError) -> PdfError {
@@ -59,6 +61,13 @@ pub struct AiSettingsFile {
     /// "low" | "high" | "max"
     #[serde(default = "default_reasoning_effort", alias = "reasoning_effort")]
     pub reasoning_effort: String,
+    /// Input budget in tokens (DeepSeek V4 allows 1M).
+    #[serde(default = "default_context_tokens", alias = "context_tokens")]
+    pub context_tokens: u32,
+}
+
+fn default_context_tokens() -> u32 {
+    aicore::default_context_tokens()
 }
 
 fn default_thinking() -> bool {
@@ -91,6 +100,7 @@ impl Default for AiSettingsFile {
             max_tokens: default_max_tokens(),
             thinking: default_thinking(),
             reasoning_effort: default_reasoning_effort(),
+            context_tokens: default_context_tokens(),
         }
     }
 }
@@ -108,6 +118,9 @@ pub struct AiSettingsView {
     pub max_tokens: u32,
     pub thinking: bool,
     pub reasoning_effort: String,
+    pub context_tokens: u32,
+    /// Maximum output tokens accepted by the API (384K).
+    pub max_output_tokens: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,6 +136,8 @@ pub struct AiSettingsInput {
     pub thinking: Option<bool>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub context_tokens: Option<u32>,
 }
 
 fn config_dir(app: &AppHandle) -> Result<PathBuf, PdfError> {
@@ -199,6 +214,8 @@ fn view(app: &AppHandle) -> AiSettingsView {
         max_tokens: settings.max_tokens,
         thinking: settings.thinking,
         reasoning_effort: settings.reasoning_effort,
+        context_tokens: settings.context_tokens.clamp(8_000, aicore::MAX_CONTEXT_TOKENS),
+        max_output_tokens: aicore::MAX_OUTPUT_TOKENS,
     }
 }
 
@@ -213,9 +230,10 @@ fn build_config(app: &AppHandle) -> Result<AiConfig, PdfError> {
         base_url: settings.base_url,
         model: settings.model,
         temperature: settings.temperature,
-        max_tokens: settings.max_tokens,
+        max_tokens: aicore::clamp_output_tokens(settings.max_tokens),
         thinking: settings.thinking,
         reasoning_effort: settings.reasoning_effort,
+        context_tokens: settings.context_tokens.clamp(8_000, aicore::MAX_CONTEXT_TOKENS),
     };
     if !config.is_configured() {
         return Err(ai_error(AiError::MissingApiKey));
@@ -242,7 +260,7 @@ pub fn ai_save_settings(app: AppHandle, input: AiSettingsInput) -> Result<AiSett
             input.model.trim().to_string()
         },
         temperature: input.temperature.clamp(0.0, 1.5),
-        max_tokens: input.max_tokens.clamp(256, 8192),
+        max_tokens: aicore::clamp_output_tokens(input.max_tokens),
         thinking: input.thinking.unwrap_or_else(default_thinking),
         reasoning_effort: input
             .reasoning_effort
@@ -252,6 +270,10 @@ pub fn ai_save_settings(app: AppHandle, input: AiSettingsInput) -> Result<AiSett
                 _ => "high".to_string(),
             })
             .unwrap_or_else(default_reasoning_effort),
+        context_tokens: input
+            .context_tokens
+            .unwrap_or_else(default_context_tokens)
+            .clamp(8_000, aicore::MAX_CONTEXT_TOKENS),
     };
     let text = serde_json::to_string_pretty(&file)
         .map_err(|error| PdfError::Internal(format!("settings serialize failed: {error}")))?;
@@ -451,7 +473,7 @@ pub async fn ai_summarize(
     )?;
     let text = join_text(&extracted);
     let client = DeepSeekClient::new(config).map_err(ai_error)?;
-    let plan = prompts::summarize_prompt(&text, &request.options);
+    let plan = prompts::summarize_prompt_with_budget(&text, &request.options, client.config().chunk_chars());
 
     emit_progress(&app, &request.job_id, "generate", 0, 1);
     let mut on_delta = |delta: &str| emit_chunk(&app, &request.job_id, delta);
@@ -584,7 +606,7 @@ pub async fn ai_ask(
         None,
         &cancel,
     )?;
-    let selected = prompts::select_relevant_pages(&extracted, &request.question, prompts::CHUNK_CHARS);
+    let selected = prompts::select_relevant_pages(&extracted, &request.question, config.chunk_chars());
     let context = selected
         .iter()
         .map(|(page, text)| format!("[page {page}]\n{text}"))
@@ -639,7 +661,7 @@ pub async fn ai_cleanup_text(
     )?;
     let text = join_text(&extracted);
     let client = DeepSeekClient::new(config).map_err(ai_error)?;
-    let chunks = prompts::chunk_text(&text, prompts::CHUNK_CHARS);
+    let chunks = prompts::chunk_text(&text, client.config().chunk_chars());
     let mut output = String::new();
     for (index, chunk) in chunks.iter().enumerate() {
         if cancel.is_cancelled() {

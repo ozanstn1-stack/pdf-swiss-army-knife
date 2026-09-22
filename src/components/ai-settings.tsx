@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Bot, CheckCircle2, KeyRound, ShieldAlert, Trash2, Zap } from "lucide-react";
 import { Badge, Button, Card, Checkbox, Field, Segmented, Slider, Spinner, TextInput } from "./ui";
+import { clamp } from "../lib/format";
 import { useT } from "../lib/i18n";
 import { aiClearKey, aiGetSettings, aiModels, aiSaveSettings, aiTestConnection } from "../lib/api";
 import type { AiModelOption, AiSettingsView, AiTestResult, ReasoningEffort } from "../lib/types";
@@ -17,12 +18,14 @@ export function AiSettings() {
   const [view, setView] = useState<AiSettingsView | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
-  const [model, setModel] = useState("deepseek-v4-flash");
+  const [model, setModel] = useState("deepseek-flash");
   const [models, setModels] = useState<AiModelOption[]>([]);
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(4096);
   const [thinking, setThinking] = useState(true);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
+  const [contextTokens, setContextTokens] = useState(200_000);
+  const [maxOutputTokens, setMaxOutputTokens] = useState(384_000);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AiTestResult | null>(null);
@@ -40,11 +43,18 @@ export function AiSettings() {
         setMaxTokens(settings.maxTokens);
         setThinking(settings.thinking);
         setReasoningEffort((settings.reasoningEffort as ReasoningEffort) ?? "high");
+        setContextTokens(settings.contextTokens ?? 200_000);
+        setMaxOutputTokens(settings.maxOutputTokens ?? 384_000);
       })
       .catch(() => undefined);
   }, []);
 
-  const isV4Model = model.trim().toLowerCase().startsWith("deepseek-v4");
+  const normalizedModel = model.trim().toLowerCase();
+  const isV4Model =
+    normalizedModel.startsWith("deepseek-v4") ||
+    normalizedModel === "deepseek-flash" ||
+    normalizedModel.startsWith("deepseek-flash-") ||
+    normalizedModel === "deepseek-reasoner";
 
   const save = async () => {
     setSaving(true);
@@ -57,6 +67,7 @@ export function AiSettings() {
         maxTokens,
         thinking,
         reasoningEffort,
+        contextTokens,
       });
       setView(updated);
       setApiKey("");
@@ -148,10 +159,60 @@ export function AiSettings() {
         <Field label={t("settings.aiTemperature")}>
           <Slider value={temperature} min={0} max={1.5} step={0.05} onChange={setTemperature} format={(value) => value.toFixed(2)} />
         </Field>
-        <Field label={t("settings.aiMaxTokens")}>
-          <Slider value={maxTokens} min={512} max={8192} step={256} onChange={setMaxTokens} />
+        <Field label={t("settings.aiMaxTokens")} hint={t("settings.aiMaxTokensHint")}>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <TextInput
+                type="number"
+                value={maxTokens}
+                min={256}
+                max={maxOutputTokens}
+                step={256}
+                onChange={(event) => setMaxTokens(clamp(Number(event.target.value) || 256, 256, maxOutputTokens))}
+              />
+              <span className="text-xs muted shrink-0">/ {maxOutputTokens.toLocaleString()}</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {[4_096, 16_384, 32_768, 65_536, 131_072, 384_000].map((preset) => (
+                <Button
+                  key={preset}
+                  size="sm"
+                  variant={maxTokens === preset ? "primary" : "default"}
+                  onClick={() => setMaxTokens(preset)}
+                >
+                  {preset >= 1000 ? `${Math.round(preset / 1024)}K` : preset}
+                </Button>
+              ))}
+            </div>
+          </div>
         </Field>
       </div>
+
+      <Field label={t("settings.aiContextTokens")} hint={t("settings.aiContextTokensHint")}>
+        <div className="flex items-center gap-2">
+          <TextInput
+            type="number"
+            value={contextTokens}
+            min={8_000}
+            max={1_000_000}
+            step={10_000}
+            onChange={(event) => setContextTokens(clamp(Number(event.target.value) || 200_000, 8_000, 1_000_000))}
+          />
+          <span className="text-xs muted shrink-0">/ 1,000,000</span>
+        </div>
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {[65_536, 131_072, 200_000, 500_000, 1_000_000].map((preset) => (
+            <Button
+              key={preset}
+              size="sm"
+              variant={contextTokens === preset ? "primary" : "default"}
+              onClick={() => setContextTokens(preset)}
+            >
+              {preset === 1_000_000 ? "1M" : `${Math.round(preset / 1024)}K`}
+            </Button>
+          ))}
+        </div>
+      </Field>
 
       <div className="flex flex-col gap-2">
         <Checkbox

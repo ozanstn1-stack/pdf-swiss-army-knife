@@ -327,6 +327,9 @@ export interface AiSettingsView {
   maxTokens: number;
   thinking: boolean;
   reasoningEffort: ReasoningEffort | string;
+  contextTokens: number;
+  /** Hard API maximum for generated tokens (384K on DeepSeek V4). */
+  maxOutputTokens: number;
 }
 
 export interface AiSettingsInput {
@@ -337,6 +340,7 @@ export interface AiSettingsInput {
   maxTokens: number;
   thinking?: boolean;
   reasoningEffort?: ReasoningEffort;
+  contextTokens?: number;
 }
 
 export interface AiTestResult {
