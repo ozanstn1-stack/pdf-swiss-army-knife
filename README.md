@@ -37,6 +37,10 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 | --- | --- |
 | ![AI assistant](docs/screenshots/30-ai-summary.png) | ![AI Q&A](docs/screenshots/31-ai-ask.png) |
 
+| AI library (saved results) | |
+| --- | --- |
+| ![AI library](docs/screenshots/33-ai-library.png) | |
+
 ### Chrome extension
 | Home | Reading mode |
 | --- | --- |
@@ -60,6 +64,11 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 - **Ask the document** — grounded Q&A over the extracted text with page citations; a keyword retriever picks the relevant pages first.
 - **Repair OCR text** — fixes broken words, hyphenation and spacing in scanned documents without summarizing.
 - **Metadata ideas** — suggests title/author/subject/keywords and can apply them to a new PDF.
+
+### Saved results and the operation log
+- **AI library** — every finished AI result is stored as a Markdown file (default `Documents\PDF Swiss Army Knife AI`, changeable in Settings) and indexed in the app config folder. The library screen lets you filter by type, search previews, read the full text, export a copy, open or reveal the file, and delete entries.
+- **Operation log** — merge, split, compress, OCR, watermark, protect, convert and AI runs append an entry with input/output paths, page count, size delta, timestamp and status. Shown in the History screen under *Operations*; paths and sizes only, never content.
+- Both can be turned off in Settings and cleared from their screens.
 
 How it stays honest:
 - **Off by default.** No AI request is possible until you add your own API key in Settings *and* confirm the data notice for the document.
