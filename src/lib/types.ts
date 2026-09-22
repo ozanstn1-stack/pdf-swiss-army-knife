@@ -269,6 +269,12 @@ export interface Settings {
   autoCleanupTemp: boolean;
   showRecentFiles: boolean;
   defaultExportFormat: "jpg" | "png";
+  /** Automatically store every AI result in the library. */
+  aiAutoSave: boolean;
+  /** AI library folder; empty means Documents/PDF Swiss Army Knife AI. */
+  aiLibraryDir: string;
+  /** Keep an operation log (paths and sizes only). */
+  keepOperationLog: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -281,6 +287,9 @@ export const DEFAULT_SETTINGS: Settings = {
   autoCleanupTemp: true,
   showRecentFiles: true,
   defaultExportFormat: "jpg",
+  aiAutoSave: true,
+  aiLibraryDir: "",
+  keepOperationLog: true,
 };
 
 export interface TextMatch {
@@ -411,6 +420,34 @@ export interface AiCleanupRequest {
   pages?: number[];
   password?: string;
   jobId: string;
+}
+
+export interface AiLibraryEntry {
+  id: string;
+  createdAt: number;
+  kind: "summary" | "translate" | "ask" | "cleanup" | "metadata" | string;
+  sourcePath: string;
+  sourceName: string;
+  model: string;
+  pages: number;
+  characters: number;
+  options: string;
+  filePath: string;
+  preview: string;
+  elapsedMs: number;
+}
+
+export interface OperationEntry {
+  id: string;
+  createdAt: number;
+  operation: string;
+  inputPath: string;
+  outputPath: string;
+  pageCount?: number;
+  inputBytes?: number;
+  outputBytes?: number;
+  ok: boolean;
+  detail?: string;
 }
 
 export interface SelectedFile {

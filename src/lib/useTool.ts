@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { cancelJob, fileSizes, pdfInfo, suggestOutput, toAppError } from "./api";
+import { cancelJob, fileSizes, logOperation, pdfInfo, suggestOutput, toAppError } from "./api";
 import { dirName, fileBaseName, isImage, isPdf, joinPath, uid } from "./format";
 import { reportError, useDev, useDrop, useJobs, useOverwritePrompt, usePasswordPrompt, useRecent, useSettings } from "./store";
 import { useT } from "./i18n";
@@ -73,6 +73,7 @@ export function useTool(options: ToolOptions): ToolSession {
   const askPassword = usePasswordPrompt((s) => s.ask);
 
   const [files, setFiles] = useState<SelectedFile[]>([]);
+  const filesRef = useRef<SelectedFile[]>([]);
   const [info, setInfo] = useState<PdfInfo | null>(null);
   const [infoError, setInfoError] = useState<string | null>(null);
   const [password, setPassword] = useState("");
@@ -88,6 +89,7 @@ export function useTool(options: ToolOptions): ToolSession {
   const [isMultiOutput, setIsMultiOutput] = useState(multiOutput);
   const taskRef = useRef<((jobId: string, overwrite: OverwriteMode) => Promise<OpResult | void>) | null>(null);
 
+  filesRef.current = files;
   const primary = files.length ? files[0] : null;
   const progress = progressMap[jobId] ?? null;
 
@@ -289,6 +291,17 @@ export function useTool(options: ToolOptions): ToolSession {
           const outcome = await task(jobId, mode);
           if (outcome) {
             setResult(outcome);
+            // Persistent operation log (paths and sizes only - never content).
+            void logOperation({
+              operation: suffix.replace(/^_/, ""),
+              inputPath: filesRef.current.length ? filesRef.current[0].path : outcome.path,
+              outputPath: outcome.path,
+              pageCount: outcome.pageCount,
+              inputBytes: outcome.originalBytes,
+              outputBytes: outcome.outputBytes,
+              ok: true,
+              detail: outcome.message,
+            });
             if (outcome.path) {
               void addRecentEntry({
                 path: outcome.path,

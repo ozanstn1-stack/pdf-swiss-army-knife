@@ -20,6 +20,7 @@ import {
   aiCleanupText,
   aiDocumentPreview,
   aiExamplePrompts,
+  aiLibrarySave,
   aiSaveOutput,
   aiSuggestMetadata,
   aiSummarize,
@@ -35,13 +36,15 @@ import { OptionCard, Screen, TwoColumn } from "../components/layout";
 import { useT } from "../lib/i18n";
 import { logFrontend } from "../lib/api";
 import { useTool } from "../lib/useTool";
-import { useDev, useSettings } from "../lib/store";
+import { useDev, useSettings, useToasts } from "../lib/store";
 import { formatBytes, uid } from "../lib/format";
 import type {
   AiExamplePrompts,
+  AiLibraryEntry,
   AiMetadataSuggestion,
   AiPreview,
   AiSettingsView,
+  AiTextResult,
   OpResult,
   SummaryLength,
   SummaryStyle,
@@ -53,6 +56,8 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
   const t = useT();
   const session = useTool({ suffix: "_ai", accept: "pdf", initialPaths: initialFiles });
   const settingsLoaded = useSettings((s) => s.loaded);
+  const settings = useSettings((s) => s.settings);
+  const pushToast = useToasts((s) => s.push);
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null);
   const devTab = useDev((s) => s.tab) as AiTab | null;
   const [tab, setTab] = useState<AiTab>("summary");
@@ -66,6 +71,8 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
   const [error, setError] = useState<string | null>(null);
   const [metadataSuggestion, setMetadataSuggestion] = useState<AiMetadataSuggestion | null>(null);
   const [metadataResult, setMetadataResult] = useState<OpResult | null>(null);
+  const [lastResult, setLastResult] = useState<{ kind: string; result: AiTextResult; options: string } | null>(null);
+  const [savedEntry, setSavedEntry] = useState<AiLibraryEntry | null>(null);
   const [showReasoning, setShowReasoning] = useState(false);
   const [summaryOptions, setSummaryOptions] = useState({
     language: "auto",
@@ -147,6 +154,35 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
     void refreshPreview();
   }, [refreshPreview]);
 
+  // Auto-save: every finished AI result is written to the library as Markdown.
+  useEffect(() => {
+    if (!lastResult || !settings.aiAutoSave || !session.primary) return;
+    const { kind, result, options } = lastResult;
+    void aiLibrarySave({
+      kind,
+      sourcePath: session.primary.path,
+      sourceName: session.primary.name,
+      model: result.model,
+      pages: result.pages,
+      characters: result.characters,
+      options,
+      text: result.text,
+      elapsedMs: result.elapsedMs,
+      directory: settings.aiLibraryDir || undefined,
+    })
+      .then((entry) => {
+        setSavedEntry(entry);
+        pushToast({ kind: "success", title: t("ai.savedToLibrary"), detail: entry.filePath });
+      })
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastResult]);
+
+  const saveToLibrary = () => {
+    if (!lastResult) return;
+    setLastResult({ ...lastResult });
+  };
+
   const configured = aiSettings?.configured ?? false;
   const canRun = configured && consent && Boolean(session.primary) && !running;
 
@@ -194,6 +230,11 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
         jobId: jobId.current,
       });
       setOutput(result.text);
+      setLastResult({
+        kind: "summary",
+        result,
+        options: `${summaryOptions.length}/${summaryOptions.style}${summaryOptions.language !== "auto" ? ` � ${summaryOptions.language}` : ""}`,
+      });
     } catch (runError) {
       fail(String((runError as { message?: string })?.message ?? runError));
     } finally {
@@ -216,6 +257,7 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
         jobId: jobId.current,
       });
       setOutput(result.text);
+      setLastResult({ kind: "translate", result, options: `${targetLanguage}${bilingual ? " / bilingual" : ""}` });
     } catch (runError) {
       fail(String((runError as { message?: string })?.message ?? runError));
     } finally {
@@ -239,6 +281,7 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
         jobId: jobId.current,
       });
       setOutput(result.text);
+      setLastResult({ kind: "ask", result, options: asked });
     } catch (runError) {
       fail(String((runError as { message?: string })?.message ?? runError));
     } finally {
@@ -260,6 +303,7 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
         jobId: jobId.current,
       });
       setOutput(result.text);
+      setLastResult({ kind: "cleanup", result, options: "ocr-text-repair" });
     } catch (runError) {
       fail(String((runError as { message?: string })?.message ?? runError));
     } finally {
@@ -708,6 +752,17 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
                 <p className="text-xs muted">{t("ai.needConsent")}</p>
               ) : null}
               {tab === "ask" && !question.trim() ? <p className="text-xs muted">{t("ai.questionPlaceholder")}</p> : null}
+              {settings.aiAutoSave ? <p className="text-xs muted">{t("ai.autoSaveOn")}</p> : null}
+              {lastResult && !settings.aiAutoSave ? (
+                <Button size="sm" variant="ghost" icon={<Save size={14} />} onClick={saveToLibrary}>
+                  {t("ai.saveToLibrary")}
+                </Button>
+              ) : null}
+              {savedEntry ? (
+                <p className="text-xs break-all" style={{ color: "var(--ok)" }}>
+                  {t("ai.savedToLibrary")}: {savedEntry.filePath}
+                </p>
+              ) : null}
             </Card>
 
             {aiSettings ? (

@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Bot, CheckCircle2, KeyRound, ShieldAlert, Trash2, Zap } from "lucide-react";
 import { Badge, Button, Card, Checkbox, Field, Segmented, Slider, Spinner, TextInput } from "./ui";
+import { useSettings } from "../lib/store";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { clamp } from "../lib/format";
 import { useT } from "../lib/i18n";
-import { aiClearKey, aiGetSettings, aiModels, aiSaveSettings, aiTestConnection } from "../lib/api";
+import { aiClearKey, aiGetSettings, aiLibraryDefaultDir, aiModels, aiSaveSettings, aiTestConnection } from "../lib/api";
 import type { AiModelOption, AiSettingsView, AiTestResult, ReasoningEffort } from "../lib/types";
 
 /**
@@ -15,6 +17,9 @@ import type { AiModelOption, AiSettingsView, AiTestResult, ReasoningEffort } fro
  */
 export function AiSettings() {
   const t = useT();
+  const settings = useSettings((s) => s.settings);
+  const updateSettings = useSettings((s) => s.update);
+  const [libraryDefault, setLibraryDefault] = useState("");
   const [view, setView] = useState<AiSettingsView | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
@@ -31,6 +36,9 @@ export function AiSettings() {
   const [testResult, setTestResult] = useState<AiTestResult | null>(null);
 
   useEffect(() => {
+    void aiLibraryDefaultDir()
+      .then(setLibraryDefault)
+      .catch(() => undefined);
     void aiModels()
       .then(setModels)
       .catch(() => undefined);
@@ -268,6 +276,39 @@ export function AiSettings() {
           </span>
         </div>
       ) : null}
+
+      <div className="card-soft p-3 flex flex-col gap-2">
+        <Checkbox
+          checked={settings.aiAutoSave}
+          onChange={(value) => void updateSettings({ aiAutoSave: value })}
+          label={t("settings.aiAutoSave")}
+        />
+        <p className="text-xs muted -mt-1">{t("settings.aiAutoSaveHint")}</p>
+        <label className="label">{t("settings.aiLibraryDir")}</label>
+        <div className="flex items-center gap-2">
+          <TextInput
+            value={settings.aiLibraryDir}
+            placeholder={libraryDefault}
+            onChange={(event) => void updateSettings({ aiLibraryDir: event.target.value })}
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              void openDialog({ directory: true, multiple: false, title: t("ai.libraryFolder") }).then((picked) => {
+                if (picked) void updateSettings({ aiLibraryDir: String(picked) });
+              });
+            }}
+          >
+            {t("common.chooseFolder")}
+          </Button>
+        </div>
+        <Checkbox
+          checked={settings.keepOperationLog}
+          onChange={(value) => void updateSettings({ keepOperationLog: value })}
+          label={t("settings.keepOperationLog")}
+        />
+      </div>
 
       <p className="text-xs muted">
         {t("settings.aiStorage")}:{" "}

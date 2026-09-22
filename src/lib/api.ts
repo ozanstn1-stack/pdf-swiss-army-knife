@@ -5,6 +5,7 @@ import type {
   AiCleanupRequest,
   AiExamplePrompts,
   AiMetadataSuggestion,
+  AiLibraryEntry,
   AiModelOption,
   AiPreview,
   AiSettingsInput,
@@ -24,6 +25,7 @@ import type {
   NumberingOptions,
   OcrLanguage,
   OcrOptions,
+  OperationEntry,
   OpResult,
   OutputSpec,
   PagePlanItem,
@@ -85,6 +87,45 @@ export const aiSaveOutput = (path: string, text: string, overwrite?: string) =>
   invoke<string>("ai_save_output", { path, text, overwrite: overwrite ?? null });
 export const aiExamplePrompts = () => invoke<AiExamplePrompts>("ai_example_prompts");
 export const aiModels = () => invoke<AiModelOption[]>("ai_models");
+
+// ---------------------------------------------------------------------------
+// AI library (saved results) and the operation log
+// ---------------------------------------------------------------------------
+
+export interface SaveAiEntryRequest {
+  kind: string;
+  sourcePath: string;
+  sourceName: string;
+  model: string;
+  pages: number;
+  characters: number;
+  options: string;
+  text: string;
+  elapsedMs: number;
+  directory?: string;
+}
+
+export const aiLibrarySave = (request: SaveAiEntryRequest) => invoke<AiLibraryEntry>("ai_library_save", { request });
+export const aiLibraryList = () => invoke<AiLibraryEntry[]>("ai_library_list");
+export const aiLibraryText = (id: string) => invoke<string>("ai_library_text", { id });
+export const aiLibraryDelete = (id: string, deleteFile = true) =>
+  invoke<AiLibraryEntry[]>("ai_library_delete", { id, deleteFile });
+export const aiLibraryClear = (deleteFiles = true) => invoke<void>("ai_library_clear", { deleteFiles });
+export const aiLibraryExport = (id: string, target: string) => invoke<string>("ai_library_export", { id, target });
+export const aiLibraryDefaultDir = () => invoke<string>("ai_library_default_dir");
+
+export const logOperation = (entry: {
+  operation: string;
+  inputPath: string;
+  outputPath?: string;
+  pageCount?: number;
+  inputBytes?: number;
+  outputBytes?: number;
+  ok?: boolean;
+  detail?: string;
+}) => invoke<void>("log_operation", { entry }).catch(() => undefined);
+export const loadOperations = () => invoke<OperationEntry[]>("load_operations");
+export const clearOperations = () => invoke<void>("clear_operations");
 
 export const onAiChunk = (
   handler: (payload: { jobId: string; delta: string; kind: "content" | "reasoning" }) => void,

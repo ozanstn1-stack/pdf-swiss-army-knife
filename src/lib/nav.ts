@@ -2,6 +2,7 @@ export type ScreenId =
   | "home"
   | "reader"
   | "ai"
+  | "aiLibrary"
   | "merge"
   | "organize"
   | "split"

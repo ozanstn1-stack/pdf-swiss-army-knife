@@ -13,6 +13,7 @@ import {
   Images,
   Info,
   Layers,
+  Library,
   Lock,
   LockOpen,
   Minimize2,
@@ -33,6 +34,7 @@ import type { Navigate, ScreenId } from "./lib/nav";
 import { Home as HomeScreen } from "./screens/Home";
 import { Reader } from "./screens/Reader";
 import { Ai } from "./screens/Ai";
+import { AiLibrary } from "./screens/AiLibrary";
 import { Merge } from "./screens/Merge";
 import { Organize } from "./screens/Organize";
 import { Split } from "./screens/Split";
@@ -209,6 +211,7 @@ export default function App() {
       home: <HomeScreen onNavigate={navigate} onDropFiles={homeDrop} dragging={dragging} onFileList={setFiles} />,
       reader: <Reader initialFiles={files} dragging={dragging} />,
       ai: <Ai initialFiles={files} dragging={dragging} />,
+      aiLibrary: <AiLibrary onOpenAi={() => navigate("ai")} />,
       merge: <Merge initialFiles={files} dragging={dragging} />,
       organize: <Organize initialFiles={files} dragging={dragging} />,
       split: <Split initialFiles={files} dragging={dragging} />,
@@ -268,7 +271,10 @@ export default function App() {
     },
     {
       label: t("nav.ai"),
-      items: [{ id: "ai", label: t("nav.ai"), icon: <Bot size={16} /> }],
+      items: [
+        { id: "ai", label: t("nav.ai"), icon: <Bot size={16} /> },
+        { id: "aiLibrary", label: t("nav.aiLibrary"), icon: <Library size={16} /> },
+      ],
     },
     {
       label: t("nav.batch"),
