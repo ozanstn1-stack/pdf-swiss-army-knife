@@ -3,7 +3,7 @@ members = ["crates/aicore", "crates/pdfcore", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "1.2.3"
+version = "1.3.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ozanstn1-stack/pdf-swiss-army-knife"
