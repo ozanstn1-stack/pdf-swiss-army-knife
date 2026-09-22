@@ -53,6 +53,20 @@ pub struct AiSettingsFile {
     pub temperature: f32,
     #[serde(default = "default_max_tokens", alias = "max_tokens")]
     pub max_tokens: u32,
+    /// DeepSeek V4 thinking mode (only sent for deepseek-v4-* models).
+    #[serde(default = "default_thinking", alias = "thinking")]
+    pub thinking: bool,
+    /// "low" | "high" | "max"
+    #[serde(default = "default_reasoning_effort", alias = "reasoning_effort")]
+    pub reasoning_effort: String,
+}
+
+fn default_thinking() -> bool {
+    true
+}
+
+fn default_reasoning_effort() -> String {
+    "high".to_string()
 }
 
 fn default_base_url() -> String {
@@ -75,6 +89,8 @@ impl Default for AiSettingsFile {
             model: aicore::DEFAULT_MODEL.to_string(),
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),
+            thinking: default_thinking(),
+            reasoning_effort: default_reasoning_effort(),
         }
     }
 }
@@ -90,6 +106,8 @@ pub struct AiSettingsView {
     pub model: String,
     pub temperature: f32,
     pub max_tokens: u32,
+    pub thinking: bool,
+    pub reasoning_effort: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -101,6 +119,10 @@ pub struct AiSettingsInput {
     pub model: String,
     pub temperature: f32,
     pub max_tokens: u32,
+    #[serde(default)]
+    pub thinking: Option<bool>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 fn config_dir(app: &AppHandle) -> Result<PathBuf, PdfError> {
@@ -175,6 +197,8 @@ fn view(app: &AppHandle) -> AiSettingsView {
         model: settings.model,
         temperature: settings.temperature,
         max_tokens: settings.max_tokens,
+        thinking: settings.thinking,
+        reasoning_effort: settings.reasoning_effort,
     }
 }
 
@@ -190,6 +214,8 @@ fn build_config(app: &AppHandle) -> Result<AiConfig, PdfError> {
         model: settings.model,
         temperature: settings.temperature,
         max_tokens: settings.max_tokens,
+        thinking: settings.thinking,
+        reasoning_effort: settings.reasoning_effort,
     };
     if !config.is_configured() {
         return Err(ai_error(AiError::MissingApiKey));
@@ -217,6 +243,15 @@ pub fn ai_save_settings(app: AppHandle, input: AiSettingsInput) -> Result<AiSett
         },
         temperature: input.temperature.clamp(0.0, 1.5),
         max_tokens: input.max_tokens.clamp(256, 8192),
+        thinking: input.thinking.unwrap_or_else(default_thinking),
+        reasoning_effort: input
+            .reasoning_effort
+            .map(|value| match value.trim().to_lowercase().as_str() {
+                "low" => "low".to_string(),
+                "max" => "max".to_string(),
+                _ => "high".to_string(),
+            })
+            .unwrap_or_else(default_reasoning_effort),
     };
     let text = serde_json::to_string_pretty(&file)
         .map_err(|error| PdfError::Internal(format!("settings serialize failed: {error}")))?;
@@ -274,7 +309,19 @@ fn emit_progress(app: &AppHandle, job_id: &str, stage: &str, current: u64, total
 }
 
 fn emit_chunk(app: &AppHandle, job_id: &str, delta: &str) {
-    let _ = app.emit("ai:chunk", serde_json::json!({ "jobId": job_id, "delta": delta }));
+    let _ = app.emit(
+        "ai:chunk",
+        serde_json::json!({ "jobId": job_id, "delta": delta, "kind": "content" }),
+    );
+}
+
+/// Thinking-mode deltas are streamed separately so the UI can show them as a
+/// dimmed trace instead of mixing them into the answer.
+fn emit_reasoning(app: &AppHandle, job_id: &str, delta: &str) {
+    let _ = app.emit(
+        "ai:chunk",
+        serde_json::json!({ "jobId": job_id, "delta": delta, "kind": "reasoning" }),
+    );
 }
 
 /// Extracts the page texts of a PDF (and reports progress/cancellation).
@@ -408,10 +455,19 @@ pub async fn ai_summarize(
 
     emit_progress(&app, &request.job_id, "generate", 0, 1);
     let mut on_delta = |delta: &str| emit_chunk(&app, &request.job_id, delta);
+    let mut on_reasoning = |delta: &str| emit_reasoning(&app, &request.job_id, delta);
     let mut on_progress = |stage: &str, current: usize, total: usize| {
         emit_progress(&app, &request.job_id, stage, current as u64, total as u64)
     };
-    let result = aicore::run_plan(&client, &plan, &cancel, &mut on_progress, &mut on_delta).await;
+    let result = aicore::run_plan(
+        &client,
+        &plan,
+        &cancel,
+        &mut on_progress,
+        &mut on_delta,
+        &mut on_reasoning,
+    )
+    .await;
     registry.finish(&request.job_id);
     let summary = result.map_err(ai_error)?;
 
@@ -474,8 +530,9 @@ pub async fn ai_translate(
         output.push_str(&header);
         let messages = prompts::translate_page_prompt(&format!("Page {page}"), text, &request.options);
         let mut on_delta = |delta: &str| emit_chunk(&app, &request.job_id, delta);
+        let mut on_reasoning = |delta: &str| emit_reasoning(&app, &request.job_id, delta);
         let translated = client
-            .chat_stream(&messages, ChatOptions::default(), &cancel, &mut on_delta)
+            .chat_stream(&messages, ChatOptions::default(), &cancel, &mut on_delta, &mut on_reasoning)
             .await
             .map_err(ai_error)?;
         output.push_str(translated.trim());
@@ -537,8 +594,9 @@ pub async fn ai_ask(
     let messages = prompts::ask_prompt(&context, &request.question);
     emit_progress(&app, &request.job_id, "generate", 0, 1);
     let mut on_delta = |delta: &str| emit_chunk(&app, &request.job_id, delta);
+    let mut on_reasoning = |delta: &str| emit_reasoning(&app, &request.job_id, delta);
     let answer = client
-        .chat_stream(&messages, ChatOptions::default(), &cancel, &mut on_delta)
+        .chat_stream(&messages, ChatOptions::default(), &cancel, &mut on_delta, &mut on_reasoning)
         .await
         .map_err(ai_error);
     registry.finish(&request.job_id);
