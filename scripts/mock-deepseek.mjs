@@ -49,11 +49,12 @@ const server = createServer((request, response) => {
     } catch {
       /* keep empty */
     }
+    const thinking = body?.thinking?.type === "enabled";
     const reply = pickReply(body);
     try {
       appendFileSync(
         process.env.TEMP + "/mock-deepseek.log",
-        `${new Date().toISOString()} stream=${Boolean(body.stream)} model=${body.model} messages=${(body.messages ?? []).length} promptChars=${(body.messages ?? []).reduce((sum, message) => sum + String(message.content ?? "").length, 0)}\n`,
+        `${new Date().toISOString()} stream=${Boolean(body.stream)} model=${body.model} thinking=${body?.thinking?.type ?? "absent"} effort=${body?.reasoning_effort ?? "absent"} messages=${(body.messages ?? []).length} promptChars=${(body.messages ?? []).reduce((sum, message) => sum + String(message.content ?? "").length, 0)}\n`,
       );
     } catch {
       /* logging is best effort */
@@ -64,8 +65,23 @@ const server = createServer((request, response) => {
         "cache-control": "no-cache",
         connection: "keep-alive",
       });
-      const words = reply.split(" ");
+      // Thinking mode: stream reasoning first (like DeepSeek V4), then the answer.
+      const reasoning = thinking ? "Considering the request, the document and the requested format. " : "";
+      const steps = reasoning
+        ? reasoning
+            .split(" ")
+            .filter(Boolean)
+            .map((word) => ({ kind: "reasoning", text: word + " " }))
+        : [];
+      // MOCK_REASONING_ONLY=1 simulates the token budget running out while the
+      // model is still thinking (the case that used to fail with an error).
+      const steps2 =
+        process.env.MOCK_REASONING_ONLY === "1"
+          ? []
+          : reply.split(" ").map((word, index) => ({ kind: "content", text: index === 0 ? word : " " + word }));
+      const allSteps = [...steps, ...steps2];
       let index = 0;
+      const words = allSteps;
       const timer = setInterval(() => {
         if (index >= words.length) {
           clearInterval(timer);
@@ -73,8 +89,9 @@ const server = createServer((request, response) => {
           response.end();
           return;
         }
-        const delta = (index === 0 ? "" : " ") + words[index];
-        response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
+        const step = words[index];
+        const delta = step.kind === "reasoning" ? { reasoning_content: step.text } : { content: step.text };
+        response.write(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`);
         index += 1;
       }, 25);
       return;

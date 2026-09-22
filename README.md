@@ -67,6 +67,7 @@ How it stays honest:
 - **Key storage:** the API key is encrypted with **Windows DPAPI** (`CryptProtectData`), so only your Windows account on that machine can decrypt it. It is never logged.
 - **Any OpenAI-compatible endpoint works.** Point the base URL at a local server (Ollama, LM Studio, llama.cpp) and the AI features stay entirely offline.
 - **Model selection:** the default is **`deepseek-v4-flash`** (DeepSeek V4 Flash, the fast model); Settings offers `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-v4-pro` and the legacy `deepseek-chat` / `deepseek-reasoner` aliases, plus a free-text field for any other model id. Note that DeepSeek's `deepseek-v4-flash` alias currently serves DeepSeek-V4-Flash-0731.
+- **Thinking mode:** V4 models reason before answering. The toggle in Settings turns that on (default) or off, `reasoning_effort` selects `low` / `high` / `max`, and the thinking trace is streamed into a collapsible panel so you can see how the answer was reached. These fields are only sent to `deepseek-v4-*` models. If the token budget runs out while the model is still thinking, the trace is shown as the result instead of an error — raise *Max tokens* or disable thinking for shorter answers.
 - Failures are reported with clear codes: missing key, rejected key, rate limit, insufficient balance, network unreachable, no text layer (run OCR first), context too large.
 
 ### Reading mode
