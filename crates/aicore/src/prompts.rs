@@ -5,9 +5,8 @@
 
 use crate::ChatMessage;
 
-/// Rough character budget per request. DeepSeek models accept a 64K token
-/// context; we stay conservative (about 40K characters ≈ 12-15K tokens) so
-/// long documents are chunked instead of failing.
+/// Default character budget per request when the caller does not derive one
+/// from the configured context window (about 16k tokens).
 pub const CHUNK_CHARS: usize = 40_000;
 /// Smallest chunk we ever produce.
 const MIN_CHUNK_CHARS: usize = 4_000;
@@ -191,6 +190,13 @@ fn style_instruction(style: SummaryStyle) -> &'static str {
 }
 
 pub fn summarize_prompt(text: &str, options: &SummaryOptions) -> Plan {
+    summarize_prompt_with_budget(text, options, CHUNK_CHARS)
+}
+
+/// Same as [`summarize_prompt`] but with an explicit per-request character
+/// budget (derived from the configured context window, up to ~1M tokens).
+pub fn summarize_prompt_with_budget(text: &str, options: &SummaryOptions, chunk_chars: usize) -> Plan {
+    let budget = chunk_chars.max(MIN_CHUNK_CHARS);
     let mut instruction = String::from(
         "Summarize the document text below.\n\
          - Cover the purpose, key facts, figures and any decisions or deadlines.\n\
@@ -204,7 +210,7 @@ pub fn summarize_prompt(text: &str, options: &SummaryOptions) -> Plan {
     }
     instruction.push_str("\nDocument text:\n");
 
-    if text.len() <= CHUNK_CHARS {
+    if text.len() <= budget {
         return Plan::Single {
             messages: vec![
                 ChatMessage::system(SUMMARY_SYSTEM),

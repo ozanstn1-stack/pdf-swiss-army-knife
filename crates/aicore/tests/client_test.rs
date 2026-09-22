@@ -3,8 +3,8 @@
 
 use aicore::prompts::{
     ask_prompt, chunk_text, metadata_prompt, parse_metadata_reply, select_relevant_pages,
-    summarize_prompt, translate_page_prompt, Plan, SummaryLength, SummaryOptions, SummaryStyle,
-    TranslateOptions,
+    summarize_prompt, summarize_prompt_with_budget, translate_page_prompt, Plan, SummaryLength,
+    SummaryOptions, SummaryStyle, TranslateOptions,
 };
 use aicore::{AiConfig, AiError, CancelToken, ChatMessage, ChatOptions, DeepSeekClient};
 use std::io::{Read, Write};
@@ -348,6 +348,45 @@ fn summarize_prompt_switches_to_map_reduce_for_long_documents() {
         }
         Plan::Single { .. } => panic!("expected map/reduce for long input"),
     }
+}
+
+#[test]
+fn context_budget_scales_the_request_size() {
+    // 200k tokens (default) must fit far more text than the old 40k chars,
+    // and the 1M maximum must not be chunked for a 2M-character document.
+    let default_budget = aicore::chunk_chars_for_context(200_000);
+    assert!(default_budget > 300_000, "default budget too small: {default_budget}");
+    let max_budget = aicore::chunk_chars_for_context(1_000_000);
+    assert_eq!(max_budget, 2_000_000);
+    assert_eq!(aicore::chunk_chars_for_context(9_999_999), 2_000_000, "clamped to the 1M context");
+
+    let config = AiConfig {
+        api_key: "k".into(),
+        context_tokens: 1_000_000,
+        ..Default::default()
+    };
+    assert_eq!(config.chunk_chars(), 2_000_000);
+
+    // A 1.2M-character document fits into a single request at 1M tokens...
+    let long_text = "kelime ".repeat(200_000); // 1.4M chars
+    let plan = summarize_prompt_with_budget(&long_text, &SummaryOptions::default(), config.chunk_chars());
+    assert!(matches!(plan, Plan::Single { .. }));
+    // ...while the same text is chunked with a small budget.
+    let chunked = summarize_prompt_with_budget(&long_text, &SummaryOptions::default(), 40_000);
+    match chunked {
+        Plan::MapReduce { chunks, .. } => assert!(chunks.len() > 20),
+        Plan::Single { .. } => panic!("expected chunking with a 40k budget"),
+    }
+}
+
+#[test]
+fn output_tokens_are_clamped_to_the_model_limit() {
+    assert_eq!(aicore::clamp_output_tokens(100), 256);
+    assert_eq!(aicore::clamp_output_tokens(8_192), 8_192);
+    assert_eq!(aicore::clamp_output_tokens(384_000), 384_000);
+    assert_eq!(aicore::clamp_output_tokens(1_000_000), aicore::MAX_OUTPUT_TOKENS);
+    assert_eq!(aicore::MAX_OUTPUT_TOKENS, 384_000);
+    assert_eq!(aicore::MAX_CONTEXT_TOKENS, 1_000_000);
 }
 
 #[test]

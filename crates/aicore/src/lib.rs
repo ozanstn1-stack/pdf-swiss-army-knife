@@ -16,21 +16,45 @@ use std::time::Duration;
 
 pub mod prompts;
 
-pub use prompts::{chunk_text, Plan};
+pub use prompts::{chunk_text, summarize_prompt_with_budget, Plan};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
-pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
+pub const DEFAULT_MODEL: &str = "deepseek-flash";
 
 /// Model ids offered by the DeepSeek platform (chat completions).
 /// `deepseek-v4-flash` currently serves DeepSeek-V4-Flash-0731; older aliases
 /// are kept for accounts that still use them.
 pub const SUGGESTED_MODELS: &[(&str, &str)] = &[
-    ("deepseek-v4-flash", "DeepSeek V4 Flash (fast, recommended)"),
+    ("deepseek-flash", "DeepSeek V4.1 Flash (fast, 1M context, recommended)"),
+    ("deepseek-v4-flash", "deepseek-v4-flash (legacy alias, served by V4.1 Flash)"),
     ("deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision (experimental, image input)"),
     ("deepseek-v4-pro", "DeepSeek V4 Pro (highest quality, slower)"),
     ("deepseek-chat", "deepseek-chat (legacy alias)"),
     ("deepseek-reasoner", "deepseek-reasoner (legacy reasoning alias)"),
 ];
+
+/// DeepSeek V4 models share a 1,000,000 token context window (input + output)
+/// and cap the generated output at 384,000 tokens.
+pub const MAX_CONTEXT_TOKENS: u32 = 1_000_000;
+pub const MAX_OUTPUT_TOKENS: u32 = 384_000;
+/// Conservative characters-per-token ratio used to turn the token budget into
+/// the amount of document text sent per request. Turkish tokenizes denser than
+/// English, so this stays well below the usual 4 chars/token.
+pub const CHARS_PER_TOKEN: f32 = 2.5;
+
+/// Characters of document text that fit into the configured context budget,
+/// leaving room for the instructions and the generated answer.
+pub fn chunk_chars_for_context(context_tokens: u32) -> usize {
+    let context = context_tokens.clamp(8_000, MAX_CONTEXT_TOKENS);
+    // Reserve ~20% of the window for the prompt scaffolding and the answer.
+    let budget_tokens = (context as f32 * 0.8) as usize;
+    ((budget_tokens as f32 * CHARS_PER_TOKEN) as usize).clamp(8_000, 4_000_000)
+}
+
+/// Output tokens clamped to what the API accepts (384K maximum).
+pub fn clamp_output_tokens(max_tokens: u32) -> u32 {
+    max_tokens.clamp(256, MAX_OUTPUT_TOKENS)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +75,14 @@ pub struct AiConfig {
     /// "low" | "high" | "max" (DeepSeek maps medium/xhigh to high).
     #[serde(default = "default_reasoning_effort")]
     pub reasoning_effort: String,
+    /// Input budget in tokens (1M maximum). Controls how much document text is
+    /// sent per request and how the map/reduce chunking is sized.
+    #[serde(default = "default_context_tokens")]
+    pub context_tokens: u32,
+}
+
+pub fn default_context_tokens() -> u32 {
+    200_000
 }
 
 fn default_thinking() -> bool {
@@ -84,14 +116,26 @@ impl Default for AiConfig {
             max_tokens: default_max_tokens(),
             thinking: default_thinking(),
             reasoning_effort: default_reasoning_effort(),
+            context_tokens: default_context_tokens(),
         }
+    }
+}
+
+impl AiConfig {
+    /// Characters of document text per request derived from the context budget.
+    pub fn chunk_chars(&self) -> usize {
+        chunk_chars_for_context(self.context_tokens)
     }
 }
 
 /// DeepSeek V4 models accept the `thinking` and `reasoning_effort` fields;
 /// other (legacy or third-party) models would reject or misuse them.
 pub fn supports_thinking(model: &str) -> bool {
-    model.trim().to_lowercase().starts_with("deepseek-v4")
+    let normalized = model.trim().to_lowercase();
+    normalized.starts_with("deepseek-v4")
+        || normalized == "deepseek-flash"
+        || normalized.starts_with("deepseek-flash-")
+        || normalized == "deepseek-reasoner"
 }
 
 impl AiConfig {
@@ -202,7 +246,7 @@ impl<'a> ChatRequestBody<'a> {
             model: &config.model,
             messages,
             temperature: options.temperature.unwrap_or(config.temperature),
-            max_tokens: options.max_tokens.unwrap_or(config.max_tokens),
+            max_tokens: clamp_output_tokens(options.max_tokens.unwrap_or(config.max_tokens)),
             stream,
             thinking: if enable_thinking {
                 Some(ThinkingSetting {
