@@ -9,6 +9,49 @@ use std::sync::OnceLock;
 
 static ENGINE_BASE: OnceLock<PathBuf> = OnceLock::new();
 
+/// Android: the app's private files directory (`<data dir>/files`). The APK
+/// assets holding the OCR language models are copied here on first launch by
+/// the Android shell, and the app tells pdfcore about it at startup.
+#[cfg(target_os = "android")]
+static ANDROID_FILES_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+#[cfg(target_os = "android")]
+pub fn set_files_dir(dir: PathBuf) {
+    let _ = ANDROID_FILES_DIR.set(dir);
+}
+
+/// Android: the directory that holds the extracted native libraries
+/// (`/data/app/<pkg>/lib/<abi>`). It is the only place the system lets an app
+/// execute a bundled binary from, so the Tesseract CLI lives there as
+/// `libtesseract.so` and pdfium as `libpdfium.so`.
+#[cfg(target_os = "android")]
+pub fn native_library_dir() -> Option<PathBuf> {
+    use std::sync::OnceLock;
+    static NATIVE_LIB_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    NATIVE_LIB_DIR
+        .get_or_init(|| {
+            let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+            let mut fallback = None;
+            for line in maps.lines() {
+                let Some(path) = line.split_whitespace().last() else {
+                    continue;
+                };
+                if !path.ends_with(".so") || !path.contains("/lib/") {
+                    continue;
+                }
+                let candidate = Path::new(path).parent()?.to_path_buf();
+                if path.contains("libpdf_sak_lib.so") {
+                    return Some(candidate);
+                }
+                if fallback.is_none() {
+                    fallback = Some(candidate);
+                }
+            }
+            fallback
+        })
+        .clone()
+}
+
 /// Windows returns extended-length paths (`\\?\D:\...`) from some APIs
 /// (including Tauri's resource dir). External tools like Tesseract cannot
 /// parse that prefix, so strip it before handing paths to child processes.
@@ -48,17 +91,22 @@ pub fn candidate_bases() -> Vec<PathBuf> {
             }
         }
     }
-    // Development fallback: the source tree.
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("src-tauri")
-        .join("resources")
-        .join("engines");
-    dirs.push(dev);
+    // Development fallback: the source tree (desktop only - the path only
+    // exists on the machine that built the app).
+    #[cfg(not(target_os = "android"))]
+    {
+        let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("src-tauri")
+            .join("resources")
+            .join("engines");
+        dirs.push(dev);
+    }
     dirs
 }
 
+#[cfg(not(target_os = "android"))]
 fn find_in_bases(relative: &str) -> Option<PathBuf> {
     for base in candidate_bases() {
         let candidate = strip_verbatim(base.join(relative));
@@ -69,6 +117,7 @@ fn find_in_bases(relative: &str) -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(target_os = "android"))]
 fn find_in_path(exe_name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path_var) {
@@ -81,39 +130,83 @@ fn find_in_path(exe_name: &str) -> Option<PathBuf> {
 }
 
 pub fn pdfium_path() -> Option<PathBuf> {
-    if let Some(p) = find_in_bases("pdfium/pdfium.dll") {
-        return Some(p);
+    #[cfg(target_os = "android")]
+    {
+        // Packaged as a native library; the system loader finds it by name,
+        // but an explicit path keeps the diagnostic output useful.
+        return native_library_dir()
+            .map(|dir| dir.join("libpdfium.so"))
+            .filter(|path| path.exists());
     }
-    // Dev convenience: the fetch script also drops a copy next to the lib.
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("assets")
-        .join("pdfium.dll");
-    if dev.exists() {
-        return Some(dev);
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(p) = find_in_bases("pdfium/pdfium.dll") {
+            return Some(p);
+        }
+        // Dev convenience: the fetch script also drops a copy next to the lib.
+        let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("pdfium.dll");
+        if dev.exists() {
+            return Some(dev);
+        }
+        find_in_path("pdfium.dll")
     }
-    find_in_path("pdfium.dll")
 }
 
 pub fn qpdf_path() -> Option<PathBuf> {
-    find_in_bases("qpdf/qpdf.exe").or_else(|| find_in_path("qpdf.exe"))
+    #[cfg(target_os = "android")]
+    {
+        None
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        find_in_bases("qpdf/qpdf.exe").or_else(|| find_in_path("qpdf.exe"))
+    }
 }
 
 pub fn tesseract_path() -> Option<PathBuf> {
-    find_in_bases("tesseract/tesseract.exe").or_else(|| find_in_path("tesseract.exe"))
+    #[cfg(target_os = "android")]
+    {
+        if let Some(override_path) = std::env::var_os("PDFSAK_TESSERACT") {
+            return Some(PathBuf::from(override_path));
+        }
+        let dir = native_library_dir()?;
+        let candidate = dir.join("libtesseract.so");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        None
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        find_in_bases("tesseract/tesseract.exe").or_else(|| find_in_path("tesseract.exe"))
+    }
 }
 
 pub fn tessdata_dir() -> Option<PathBuf> {
-    let bundled = find_in_bases("tesseract/tessdata");
-    if bundled.is_some() {
-        return bundled;
-    }
-    if let Some(exe) = tesseract_path() {
-        let local = exe.parent()?.join("tessdata");
-        if local.exists() {
-            return Some(local);
+    #[cfg(target_os = "android")]
+    {
+        let dir = ANDROID_FILES_DIR.get()?.join("tessdata");
+        if dir.exists() {
+            return Some(dir);
         }
+        None
     }
-    std::env::var_os("TESSDATA_PREFIX").map(PathBuf::from)
+    #[cfg(not(target_os = "android"))]
+    {
+        let bundled = find_in_bases("tesseract/tessdata");
+        if bundled.is_some() {
+            return bundled;
+        }
+        if let Some(exe) = tesseract_path() {
+            let local = exe.parent()?.join("tessdata");
+            if local.exists() {
+                return Some(local);
+            }
+        }
+        std::env::var_os("TESSDATA_PREFIX").map(PathBuf::from)
+    }
 }
 
 /// Builds a `Command` for tesseract with a hardened environment

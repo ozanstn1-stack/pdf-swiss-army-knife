@@ -8,6 +8,7 @@ import {
   Type,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { isAndroid, pickAndroidFiles } from "../lib/mobile";
 import { Badge, Button, Card, ColorInput, Field, Slider, Toggle } from "../components/ui";
 import { DropZone, InfoStrip, OutputBar, ResultCard } from "../components/files";
 import { PageCanvas, Pager } from "../components/pages";
@@ -76,6 +77,11 @@ export function Annotate({ initialFiles, dragging }: { initialFiles?: string[]; 
     );
 
   const pickImage = async () => {
+    if (isAndroid()) {
+      const paths = await pickAndroidFiles({ multiple: false, accept: "image" }).catch(() => []);
+      if (paths.length) setImagePath(paths[0]);
+      return;
+    }
     const picked = await open({ multiple: false, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg"] }] });
     if (picked) setImagePath(String(picked));
   };

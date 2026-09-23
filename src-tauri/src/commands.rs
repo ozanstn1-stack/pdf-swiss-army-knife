@@ -1185,6 +1185,13 @@ pub fn output_exists(path: String) -> bool {
     Path::new(&path).exists()
 }
 
+/// Creates a directory (including its parents). The Android shell uses this to
+/// stage documents picked through the system file picker inside the app cache.
+#[tauri::command]
+pub fn ensure_dir(path: String) -> Result<(), PdfError> {
+    std::fs::create_dir_all(Path::new(&path)).map_err(PdfError::from_io)
+}
+
 /// Suggests a default output path next to the input.
 #[tauri::command]
 pub fn suggest_output(input: String, suffix: String) -> String {

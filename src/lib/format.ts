@@ -44,7 +44,8 @@ export function fileStem(path: string): string {
 export function dirName(path: string): string {
   const parts = path.split(/[\\/]/);
   parts.pop();
-  return parts.join("\\");
+  const separator = path.includes("\\") ? "\\" : "/";
+  return parts.join(separator);
 }
 
 export function joinPath(dir: string, name: string): string {

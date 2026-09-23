@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Image as ImageIcon, Stamp } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { isAndroid, pickAndroidFiles } from "../lib/mobile";
 import { Card, Field, Segmented, Slider, Toggle } from "../components/ui";
 import { DropZone, FileList, InfoStrip, OutputBar, ResultCard } from "../components/files";
 import { PageCanvas } from "../components/pages";
@@ -51,6 +52,11 @@ export function Watermark({ initialFiles, dragging }: { initialFiles?: string[];
   }, [pagesText, pageCount]);
 
   const pickImage = async () => {
+    if (isAndroid()) {
+      const paths = await pickAndroidFiles({ multiple: false, accept: "image" }).catch(() => []);
+      if (paths.length) patch({ kind: "image", image_path: paths[0] });
+      return;
+    }
     const picked = await open({ multiple: false, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg"] }] });
     if (picked) patch({ kind: "image", image_path: String(picked) });
   };

@@ -1,11 +1,11 @@
 # PDF Swiss Army Knife
 
-**All your PDF tools in one place — a local-first Windows desktop toolkit for PDFs, plus a Chrome extension for the browser.**
+**All your PDF tools in one place — a local-first toolkit for Windows and Android, plus a Chrome extension for the browser.**
 Merge, split, organize, compress, OCR, watermark, protect and convert documents without uploading anything anywhere — with an optional, clearly fenced AI assistant (DeepSeek or any OpenAI-compatible endpoint) for summaries, translation and document Q&A.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
-![Version](https://img.shields.io/badge/version-1.1.0-success)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20%C2%B7%20Android%207%2B-0078d4)
+![Version](https://img.shields.io/badge/version-1.4.0-success)
 
 > **Privacy first:** every operation runs on your machine by default. There is no telemetry and no analytics, and passwords are never logged or stored. The only network feature is the optional AI assistant, which stays disabled until you add your own API key and confirm the data notice. See [Privacy & security](#privacy--security).
 
@@ -40,6 +40,11 @@ Merge, split, organize, compress, OCR, watermark, protect and convert documents 
 | AI library (saved results) | |
 | --- | --- |
 | ![AI library](docs/screenshots/33-ai-library.png) | |
+
+### Android
+| Home | Navigation |
+| --- | --- |
+| ![Android home](docs/screenshots/40-android-home.png) | ![Android menu](docs/screenshots/41-android-menu.png) |
 
 ### Chrome extension
 | Home | Reading mode |
@@ -128,6 +133,31 @@ How it stays honest:
 - Recent files (paths + timestamps only), keyboard shortcuts, cancel-able long operations, friendly error messages with stable error codes.
 - Windows installer (NSIS) and portable ZIP.
 
+## Android app
+
+The same toolkit as an APK — identical screens, identical operations, identical
+offline engines. pdfium and Tesseract ship inside the package, so OCR and
+rendering work without downloads or network access. See
+[docs/android.md](docs/android.md) for the full build guide.
+
+| Feature | Android |
+| --- | --- |
+| Every tool (merge, split, organize, compress, OCR, watermark, protect/unlock, convert, metadata, annotate, page tools, batch, reader, AI) | **Yes** — same UI, drawer navigation on phones |
+| Offline engines | pdfium + Tesseract 4.1 (8 languages) inside the APK |
+| Pick documents | System file picker (Storage Access Framework) |
+| Save results | Automatically to `Downloads/PDF Swiss Army Knife`, or to a destination you pick with *Save as…* |
+| Open / send a result | System viewer and share sheet |
+| Reading mode, search, thumbnails | Yes |
+
+```powershell
+npm run android:engines     # pdfium + Tesseract CLI + tessdata (once)
+npm run android:build       # release APK (arm64-v8a)  → release-artifacts/
+npm run android:build:all   # arm64-v8a + armeabi-v7a
+adb install -r release-artifacts\pdf-swiss-army-knife-arm64-v8a-app-arm64-release.apk
+```
+
+Minimum Android version: 7.0 (API 24). Targets Android 16 (API 36).
+
 ## Chrome extension
 
 A second, fully offline build of the toolkit that runs inside Chrome (Manifest V3, no host permissions, no network calls). It shares the design language of the desktop app and implements the operations with [pdf-lib](https://github.com/Hopding/pdf-lib) (structure) and [pdf.js](https://github.com/mozilla/pdf.js) (rendering, text, search) — everything bundled locally.
@@ -208,13 +238,22 @@ Design notes:
 ## Installation
 
 ### End users
-1. Download `PDF-Swiss-Army-Knife-Setup-1.0.0.exe` from the [latest release](../../releases/latest).
+
+**Windows**
+1. Download `PDF-Swiss-Army-Knife-Setup-<version>.exe` from the [latest release](../../releases/latest).
 2. Run it (no admin rights required for the per-user install) and launch **PDF Swiss Army Knife**.
 3. All native engines are included — no extra downloads, no runtime setup.
 
-Prefer no installer? Grab `PDF-Swiss-Army-Knife-Portable-1.0.0.zip`, extract anywhere and run `PDF-Swiss-Army-Knife.exe`. The `resources` folder next to the executable must stay next to it.
+Prefer no installer? Grab `PDF-Swiss-Army-Knife-Portable-<version>.zip`, extract anywhere and run `PDF-Swiss-Army-Knife.exe`. The `resources` folder next to the executable must stay next to it.
 
 **Requirements:** Windows 10/11 x64, WebView2 runtime (preinstalled on current Windows 10/11).
+
+**Android**
+1. Download `pdf-swiss-army-knife-arm64-v8a-app-arm64-release.apk` (or the `armeabi-v7a` one for older devices) from the [latest release](../../releases/latest).
+2. Open it on the device and allow installing apps from your browser/file manager when asked.
+3. Everything is inside the APK: rendering engine, OCR engine and language models.
+
+**Requirements:** Android 7.0 or newer. Results are written to `Downloads/PDF Swiss Army Knife` (or wherever *Save as…* points).
 
 ### Development
 
@@ -263,6 +302,16 @@ npm run package            # release-artifacts/: installer, portable ZIP, SHA256
 - `release-artifacts/PDF-Swiss-Army-Knife-Portable-<version>.zip`
 - `release-artifacts/SHA256SUMS.txt`
 
+Android (needs the SDK, NDK 27 and the Rust Android targets — see [docs/android.md](docs/android.md)):
+
+```powershell
+npm run android:engines     # once: pdfium, Tesseract CLI and the OCR models
+npm run android:build:all   # release APKs for arm64-v8a and armeabi-v7a
+```
+
+`.github/workflows/android.yml` does the same on GitHub runners and attaches
+the APKs to the release when a `v*` tag is pushed.
+
 ### Development helpers
 
 | Script | Purpose |
@@ -279,6 +328,7 @@ npm run package            # release-artifacts/: installer, portable ZIP, SHA256
 | Platform | Status |
 | --- | --- |
 | Windows 10/11 x64 | **Supported and shipped** (v1.0.0) |
+| Android 7.0+ (arm64-v8a, armeabi-v7a) | **Supported and shipped** (v1.4.0) — APK, all tools, offline engines |
 | macOS / Linux | Architecture is portable (`pdfcore` has no Tauri dependency and engine paths are resolved at runtime) but not built or tested yet. Tracking in the roadmap. |
 
 ---

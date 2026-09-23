@@ -56,7 +56,7 @@ export function Settings() {
 
   return (
     <Screen title={t("settings.title")} subtitle={t("settings.subtitle")}>
-      <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))" }}>
+      <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(340px, 100%), 1fr))" }}>
         <Card className="p-5 flex flex-col gap-4">
           <h3 className="font-semibold flex items-center gap-2">
             <Sparkles size={16} style={{ color: "var(--accent)" }} /> {t("settings.appearance")}

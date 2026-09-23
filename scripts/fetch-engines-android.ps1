@@ -1,0 +1,179 @@
+# PDF Swiss Army Knife - Android engine fetcher
+# Downloads the native engines used by the Android build into
+#   src-tauri/resources/engines-android/<abi>/   (packaged as jniLibs)
+#   src-tauri/resources/android-assets/tessdata/ (packaged as APK assets)
+#
+#   libpdfium.so    - PDF rendering (BSD-3-Clause, prebuilt by bblanchon/pdfium-binaries)
+#   libtesseract.so - Tesseract CLI for Android (Apache-2.0, prebuilt by agnostic-apollo/tesseract-for-android)
+#   tessdata_fast   - language models (Apache-2.0)
+#
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-engines-android.ps1 [-Force]
+
+param(
+    [switch]$Force,
+    [string[]]$Abis = @('arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86')
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$root = Split-Path -Parent $PSScriptRoot
+$enginesDir = Join-Path $root 'src-tauri/resources/engines-android'
+$assetsDir = Join-Path $root 'src-tauri/resources/android-assets/tessdata'
+$desktopTessdata = Join-Path $root 'src-tauri/resources/engines/tesseract/tessdata'
+$cacheBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [System.IO.Path]::GetTempPath() }
+$cacheDir = Join-Path $cacheBase 'pdf-sak-cache'
+$isWindowsHost = [bool]($env:OS -eq 'Windows_NT') -or [bool]$IsWindows
+$hostTag = if ($isWindowsHost) { 'windows-x86_64' } else { 'linux-x86_64' }
+
+New-Item -ItemType Directory -Force -Path $enginesDir, $assetsDir, $cacheDir | Out-Null
+
+function Download-File {
+    param([string]$Url, [string]$OutFile)
+    if ((Test-Path $OutFile) -and -not $Force) {
+        Write-Host "  cached: $OutFile"
+        return
+    }
+    Write-Host "  downloading: $Url"
+    $tmp = "$OutFile.part"
+    Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing -Headers @{ 'User-Agent' = 'pdf-sak-build' }
+    Move-Item -Force $tmp $OutFile
+}
+
+function Find-NdkStrip {
+    $candidates = @()
+    if ($env:ANDROID_NDK_HOME) { $candidates += $env:ANDROID_NDK_HOME }
+    if ($env:NDK_HOME) { $candidates += $env:NDK_HOME }
+    foreach ($sdkRoot in @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT, (Join-Path $env:LOCALAPPDATA 'Android\Sdk'))) {
+        if (-not $sdkRoot) { continue }
+        $ndkRoot = Join-Path $sdkRoot 'ndk'
+        if (Test-Path $ndkRoot) {
+            $candidates += (Get-ChildItem $ndkRoot -Directory | Sort-Object Name -Descending | Select-Object -ExpandProperty FullName)
+        }
+    }
+    foreach ($ndk in $candidates) {
+        foreach ($name in @('llvm-strip', 'llvm-strip.exe')) {
+            $strip = Join-Path $ndk "toolchains/llvm/prebuilt/$hostTag/bin/$name"
+            if (Test-Path $strip) { return $strip }
+        }
+    }
+    return $null
+}
+
+$pinned = @{
+    pdfiumUrl  = 'https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8057/pdfium-android-{0}.tgz'
+    tessUrl    = 'https://github.com/agnostic-apollo/tesseract-for-android/releases/download/v1.0.0/tesseract-binaries-v1.0.0.zip'
+    tessLangs  = @('eng', 'tur', 'deu', 'nld', 'fra', 'spa', 'ita', 'bul', 'osd')
+}
+
+$pdfiumArch = @{
+    'arm64-v8a'   = 'arm64'
+    'armeabi-v7a' = 'arm'
+    'x86_64'      = 'x64'
+    'x86'         = 'x86'
+}
+
+$strip = Find-NdkStrip
+if (-not $strip) { Write-Warning 'llvm-strip not found (install the Android NDK); tesseract binaries stay unstripped and much larger' }
+
+# ---------------------------------------------------------------- pdfium
+$pdfiumLicenseDir = Join-Path $enginesDir 'licenses/pdfium'
+foreach ($archAbi in $Abis) {
+    $target = Join-Path (Join-Path $enginesDir $archAbi) 'libpdfium.so'
+    if ((Test-Path $target) -and -not $Force) { Write-Host "==> pdfium $archAbi (already present)"; continue }
+    Write-Host "==> pdfium $archAbi"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    $tgz = Join-Path $cacheDir "pdfium-android-$($pdfiumArch[$archAbi]).tgz"
+    Download-File -Url ($pinned.pdfiumUrl -f $pdfiumArch[$archAbi]) -OutFile $tgz
+    $tmp = Join-Path $cacheDir "pdfium-android-$archAbi-x"
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    tar -xzf $tgz -C $tmp
+    Copy-Item (Join-Path $tmp 'lib/libpdfium.so') $target -Force
+    New-Item -ItemType Directory -Force -Path $pdfiumLicenseDir | Out-Null
+    Copy-Item (Join-Path $tmp 'LICENSE') (Join-Path $pdfiumLicenseDir 'LICENSE') -Force -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $tmp 'licenses/*') $pdfiumLicenseDir -Force -ErrorAction SilentlyContinue
+    Write-Host "  -> $target"
+}
+
+# ---------------------------------------------------------------- tesseract CLI
+$tessZip = Join-Path $cacheDir 'tesseract-android.zip'
+$tessNeeded = $Abis | Where-Object { -not (Test-Path (Join-Path (Join-Path $enginesDir $_) 'libtesseract.so')) }
+if ($tessNeeded -or $Force) {
+    Write-Host '==> tesseract'
+    Download-File -Url $pinned.tessUrl -OutFile $tessZip
+    $tmp = Join-Path $cacheDir 'tesseract-android-x'
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
+    Expand-Archive -Path $tessZip -DestinationPath $tmp -Force
+    foreach ($archAbi in $Abis) {
+        $source = Join-Path $tmp "tesseract-$archAbi"
+        if (-not (Test-Path $source)) { Write-Warning "no tesseract build for $archAbi"; continue }
+        $targetDir = Join-Path $enginesDir $archAbi
+        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        $target = Join-Path $targetDir 'libtesseract.so'
+        Copy-Item $source $target -Force
+        if ($strip) { & $strip $target }
+        Write-Host ("  -> {0} ({1:N1} MB)" -f $target, ((Get-Item $target).Length / 1MB))
+    }
+} else { Write-Host '==> tesseract (already present)' }
+
+# ---------------------------------------------------------------- tessdata (assets)
+$tessDataAssets = $assetsDir
+New-Item -ItemType Directory -Force -Path $tessDataAssets | Out-Null
+foreach ($lang in $pinned.tessLangs) {
+    $name = "$lang.traineddata"
+    $target = Join-Path $tessDataAssets $name
+    if ((Test-Path $target) -and -not $Force) { continue }
+    $local = Join-Path $desktopTessdata $name
+    if (Test-Path $local) {
+        Write-Host "==> tessdata $lang (copy from desktop engines)"
+        Copy-Item $local $target -Force
+    } else {
+        Write-Host "==> tessdata $lang"
+        Download-File -Url "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/$name" -OutFile $target
+    }
+}
+# runtime configs (tesseract looks these up next to the language models)
+foreach ($sub in @('configs', 'tessconfigs')) {
+    $target = Join-Path $tessDataAssets $sub
+    if ((Test-Path $target) -and -not $Force) { continue }
+    $local = Join-Path $desktopTessdata $sub
+    if (Test-Path $local) {
+        Write-Host "==> tessdata $sub (copy from desktop engines)"
+        Copy-Item $local $target -Recurse -Force
+    } else {
+        Write-Host "==> tessdata $sub (download)"
+        $url = "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/4.1.0.tar.gz"
+        $tgz = Join-Path $cacheDir 'tesseract-src-4.1.0.tar.gz'
+        Download-File -Url $url -OutFile $tgz
+        $tmp = Join-Path $cacheDir 'tesseract-src'
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        tar -xzf $tgz -C $tmp --strip-components=3 "tesseract-4.1.0/tessdata/$sub"
+        Copy-Item (Join-Path $tmp $sub) $target -Recurse -Force
+    }
+}
+$pdfTtf = Join-Path $tessDataAssets 'pdf.ttf'
+if (-not (Test-Path $pdfTtf)) {
+    $local = Join-Path $desktopTessdata 'pdf.ttf'
+    if (Test-Path $local) { Copy-Item $local $pdfTtf -Force }
+}
+$license = Join-Path $tessDataAssets 'LICENSE.tessdata_fast.txt'
+if (-not (Test-Path $license)) {
+    Download-File -Url 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/LICENSE' -OutFile $license
+}
+
+# ---------------------------------------------------------------- verify
+Write-Host ''
+Write-Host 'Android engine status:'
+foreach ($archAbi in $Abis) {
+    $dir = Join-Path $enginesDir $archAbi
+    $pdfium = Join-Path $dir 'libpdfium.so'
+    $tess = Join-Path $dir 'libtesseract.so'
+    $pdfiumSize = if (Test-Path $pdfium) { '{0:N1} MB' -f ((Get-Item $pdfium).Length / 1MB) } else { 'missing' }
+    $tessSize = if (Test-Path $tess) { '{0:N1} MB' -f ((Get-Item $tess).Length / 1MB) } else { 'missing' }
+    Write-Host ("  {0,-12} pdfium: {1,-9} tesseract: {2}" -f $archAbi, $pdfiumSize, $tessSize)
+}
+Write-Host "  tessdata: $((Get-ChildItem $tessDataAssets -Filter *.traineddata).Count) languages"
+Write-Host 'Done.'

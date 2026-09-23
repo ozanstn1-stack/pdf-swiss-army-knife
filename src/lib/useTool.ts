@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { documentDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cancelJob, fileSizes, logOperation, pdfInfo, suggestOutput, toAppError } from "./api";
 import { dirName, fileBaseName, isImage, isPdf, joinPath, uid } from "./format";
+import { isAndroid, pickAndroidFiles, publishOutputs, type PublishTarget } from "./mobile";
 import { reportError, useDev, useDrop, useJobs, useOverwritePrompt, usePasswordPrompt, useRecent, useSettings } from "./store";
 import { useT } from "./i18n";
 import type { OpResult, OutputSpec, OverwriteMode, PdfInfo, ProgressPayload, SelectedFile } from "./types";
@@ -61,6 +63,12 @@ export interface ToolSession {
   /** Development automation hook (no-op in normal use). */
   registerAutoRun: (handler: () => void) => void;
   reloadInfo: () => Promise<void>;
+
+  /** Android only: user-chosen export destination (SAF save dialog/picker). */
+  androidTarget: PublishTarget | null;
+  setAndroidTarget: (target: PublishTarget | null) => void;
+  /** Android only: copies finished documents to the public Downloads folder. */
+  publish: (paths: string[]) => Promise<void>;
 }
 
 export function useTool(options: ToolOptions): ToolSession {
@@ -87,7 +95,11 @@ export function useTool(options: ToolOptions): ToolSession {
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
 
   const [isMultiOutput, setIsMultiOutput] = useState(multiOutput);
+  const [androidTarget, setAndroidTarget] = useState<PublishTarget | null>(null);
+  const androidTargetRef = useRef<PublishTarget | null>(null);
   const taskRef = useRef<((jobId: string, overwrite: OverwriteMode) => Promise<OpResult | void>) | null>(null);
+
+  androidTargetRef.current = androidTarget;
 
   filesRef.current = files;
   const primary = files.length ? files[0] : null;
@@ -125,6 +137,12 @@ export function useTool(options: ToolOptions): ToolSession {
   );
 
   const pickFiles = useCallback(async () => {
+    if (isAndroid()) {
+      const paths = await pickAndroidFiles({ multiple, accept }).catch(() => []);
+      if (!paths.length) return;
+      await addPaths(paths);
+      return;
+    }
     const filters =
       accept === "pdf"
         ? [{ name: "PDF", extensions: ["pdf"] }]
@@ -221,6 +239,23 @@ export function useTool(options: ToolOptions): ToolSession {
     }
     let cancelled = false;
     const suggestedName = primary.path.replace(/\.[^.\\/]+$/, "") + suffix + (accept === "image" ? ".pdf" : ".pdf");
+    // Android: outputs stay inside the app's Documents folder and are copied
+    // to the public Downloads folder (or a picked destination) afterwards.
+    if (isAndroid()) {
+      void (async () => {
+        let base = settings.defaultOutputDir;
+        if (!base) {
+          const documents = await documentDir().catch(() => "");
+          base = documents ? joinPath(documents, "PDF Swiss Army Knife") : dirName(primary.path);
+        }
+        if (cancelled) return;
+        setOutputPath(joinPath(base, fileBaseName(suggestedName)));
+        setOutputDir(base);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
     const target = settings.defaultOutputDir ? joinPath(settings.defaultOutputDir, fileBaseName(suggestedName)) : suggestedName;
     if (!settings.defaultOutputDir) {
       void suggestOutput(primary.path, suffix)
@@ -279,6 +314,14 @@ export function useTool(options: ToolOptions): ToolSession {
     return () => clearTimeout(timer);
   }, [devAutoRun, info, loadInfo, primary, running]);
 
+  // Android: copy finished documents to a visible location (Downloads by
+  // default, or the destination the user picked) so they can be opened and
+  // shared. No-op on desktop.
+  const publish = useCallback(async (paths: string[]) => {
+    if (!isAndroid() || !paths.length) return;
+    await publishOutputs(paths, androidTargetRef.current ?? undefined);
+  }, []);
+
   const run = useCallback(
     async (task: (jobId: string, overwrite: OverwriteMode) => Promise<OpResult | void>) => {
       taskRef.current = task;
@@ -290,6 +333,9 @@ export function useTool(options: ToolOptions): ToolSession {
         try {
           const outcome = await task(jobId, mode);
           if (outcome) {
+            if (outcome.path) {
+              await publish([outcome.path]);
+            }
             setResult(outcome);
             // Persistent operation log (paths and sizes only - never content).
             void logOperation({
@@ -330,7 +376,7 @@ export function useTool(options: ToolOptions): ToolSession {
 
       await execute(overwrite);
     },
-    [addRecentEntry, isMultiOutput, jobId, outputPath, overwrite, suffix, t],
+    [addRecentEntry, isMultiOutput, jobId, outputPath, overwrite, publish, suffix, t],
   );
 
   const cancel = useCallback(() => {
@@ -380,6 +426,9 @@ export function useTool(options: ToolOptions): ToolSession {
     setIsMultiOutput,
     registerAutoRun,
     reloadInfo,
+    androidTarget,
+    setAndroidTarget,
+    publish,
   };
 }
 

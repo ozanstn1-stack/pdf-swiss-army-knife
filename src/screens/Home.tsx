@@ -23,7 +23,7 @@ import { Screen } from "../components/layout";
 import { useT } from "../lib/i18n";
 import { useRecent, useSettings } from "../lib/store";
 import { fileBaseName, formatDate, isPdf } from "../lib/format";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { isAndroid, openAnyFile, revealAnyFile } from "../lib/mobile";
 import type { Navigate, ScreenId } from "../lib/nav";
 import { fileStem } from "../lib/format";
 
@@ -84,8 +84,8 @@ export function Home({
           const first = paths[0];
           if (first) setSuggestion(first);
         }}
-        title={t("home.dropTitle")}
-        hint={t("home.dropHint")}
+        title={isAndroid() ? t("common.selectFiles") : t("home.dropTitle")}
+        hint={isAndroid() ? t("common.tapHint") : t("home.dropHint")}
         dragging={dragging}
       />
 
@@ -178,13 +178,13 @@ export function Home({
                             onFileList([entry.path]);
                             onNavigate("organize");
                           } else {
-                            void openPath(entry.path).catch(() => undefined);
+                            void openAnyFile(entry.path).catch(() => undefined);
                           }
                         }}
                       >
                         {t("common.open")}
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => void revealItemInDir(entry.path).catch(() => undefined)}>
+                      <Button size="sm" variant="ghost" onClick={() => void revealAnyFile(entry.path).catch(() => undefined)}>
                         📁
                       </Button>
                     </div>

@@ -16,6 +16,13 @@ import {
 } from "lucide-react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
+  isAndroid,
+  pickAndroidSaveTarget,
+  publishOutputs,
+  saveTextOnAndroid,
+  type PublishTarget,
+} from "../lib/mobile";
+import {
   aiAsk,
   aiCleanupText,
   aiDocumentPreview,
@@ -37,7 +44,7 @@ import { useT } from "../lib/i18n";
 import { logFrontend } from "../lib/api";
 import { useTool } from "../lib/useTool";
 import { useDev, useSettings, useToasts } from "../lib/store";
-import { formatBytes, uid } from "../lib/format";
+import { fileBaseName, formatBytes, uid } from "../lib/format";
 import type {
   AiExamplePrompts,
   AiLibraryEntry,
@@ -331,17 +338,27 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
 
   const applyMetadata = async () => {
     if (!session.primary || !metadataSuggestion) return;
-    const picked = await saveDialog({
-      title: t("common.save"),
-      defaultPath: session.outputPath,
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-    });
-    if (!picked) return;
+    let targetPath = session.outputPath;
+    let androidTarget: PublishTarget["file"] = null;
+    if (isAndroid()) {
+      const chosen = await pickAndroidSaveTarget(fileBaseName(session.outputPath) || "document.pdf").catch(() => null);
+      if (!chosen) return;
+      androidTarget = chosen;
+      targetPath = session.outputPath;
+    } else {
+      const picked = await saveDialog({
+        title: t("common.save"),
+        defaultPath: session.outputPath,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (!picked) return;
+      targetPath = String(picked);
+    }
     setRunning(true);
     try {
       const result = await editMetadata(
         session.primary.path,
-        { path: String(picked), overwrite: "error" },
+        { path: targetPath, overwrite: isAndroid() ? "replace" : "error" },
         {
           title: metadataSuggestion.title,
           author: metadataSuggestion.author,
@@ -356,6 +373,9 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
         uid("ai-meta"),
         session.password || undefined,
       );
+      if (androidTarget) {
+        await publishOutputs([result.path], { file: androidTarget });
+      }
       setMetadataResult(result);
     } catch (applyError) {
       fail(String((applyError as { message?: string })?.message ?? applyError));
@@ -373,9 +393,22 @@ export function Ai({ initialFiles, dragging }: { initialFiles?: string[]; draggi
     if (!output.trim()) return;
     const extension = tab === "summary" || tab === "ask" || tab === "metadata" ? "md" : "md";
     const base = session.primary ? session.primary.path.replace(/\.pdf$/i, "") : "ai-output";
+    const defaultName = `${base}${tab === "translate" ? "_translated" : tab === "cleanup" ? "_clean" : "_ai"}.${extension}`;
+    if (isAndroid()) {
+      try {
+        const saved = await saveTextOnAndroid(output, fileBaseName(defaultName));
+        if (saved) {
+          setError(null);
+          setSavedPath(defaultName);
+        }
+      } catch (saveError) {
+        fail(String((saveError as { message?: string })?.message ?? saveError));
+      }
+      return;
+    }
     const picked = await saveDialog({
       title: t("common.save"),
-      defaultPath: `${base}${tab === "translate" ? "_translated" : tab === "cleanup" ? "_clean" : "_ai"}.${extension}`,
+      defaultPath: defaultName,
       filters: [
         { name: "Markdown", extensions: ["md"] },
         { name: "Text", extensions: ["txt"] },

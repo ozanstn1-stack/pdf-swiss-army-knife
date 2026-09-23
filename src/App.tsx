@@ -16,6 +16,7 @@ import {
   Library,
   Lock,
   LockOpen,
+  Menu,
   Minimize2,
   Moon,
   Puzzle,
@@ -52,6 +53,7 @@ import { Settings } from "./screens/Settings";
 import { InfoScreen } from "./screens/Info";
 import { OverwriteDialog, PasswordDialog, Toasts } from "./components/files";
 import { Badge, IconButton } from "./components/ui";
+import { isAndroid, pickAndroidFiles } from "./lib/mobile";
 
 type PageToolTab = "extract" | "delete" | "rotate" | "resize" | "crop" | "numbering";
 
@@ -72,6 +74,18 @@ export default function App() {
   const [securityTab, setSecurityTab] = useState<"protect" | "unlock">("protect");
   const [dragging, setDragging] = useState(false);
   const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.innerWidth < 900);
+
+  // Phones always use the drawer navigation; desktop windows switch to it
+  // when they get narrow enough for the sidebar to waste space.
+  const compactNav = isAndroid() || narrow;
+
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < 900);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const navigate = useCallback<Navigate>((next, options) => {
     setFiles(options?.files ?? []);
@@ -176,18 +190,27 @@ export default function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
         event.preventDefault();
-        void open({
-          multiple: true,
-          filters: [{ name: "Documents", extensions: ["pdf", "jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"] }],
-        }).then((picked) => {
-          if (!picked) return;
-          const paths = (Array.isArray(picked) ? picked : [picked]).map(String);
+        const handlePicked = (paths: string[]) => {
+          if (!paths.length) return;
           if (screen === "home") {
             setFiles(paths);
           } else {
             const handler = useDrop.getState().handler;
             if (handler) handler(paths);
           }
+        };
+        if (isAndroid()) {
+          void pickAndroidFiles({ multiple: true, accept: "any" })
+            .then(handlePicked)
+            .catch(() => undefined);
+          return;
+        }
+        void open({
+          multiple: true,
+          filters: [{ name: "Documents", extensions: ["pdf", "jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"] }],
+        }).then((picked) => {
+          if (!picked) return;
+          handlePicked((Array.isArray(picked) ? picked : [picked]).map(String));
         });
         return;
       }
@@ -289,6 +312,89 @@ export default function App() {
 
   const isDark = settings.theme === "dark" || (settings.theme === "system" && document.documentElement.classList.contains("dark"));
 
+  const renderNav = (showLabels: boolean) => (
+    <>
+      {navGroups.map((group, index) => (
+        <div key={index}>
+          {group.label && showLabels ? <p className="nav-group-label">{group.label}</p> : null}
+          {group.items.map((item) => {
+            const active =
+              screen === item.id ||
+              (item.id === "pdfToImages" && screen === "pdfToImages") ||
+              (item.id === "imagesToPdf" && screen === "imagesToPdf");
+            return (
+              <button
+                key={item.id}
+                className="nav-item"
+                data-active={active}
+                onClick={() => {
+                  navigate(item.id);
+                  setNavOpen(false);
+                }}
+                title={showLabels ? undefined : item.label}
+              >
+                <span className="shrink-0">{item.icon}</span>
+                {showLabels ? <span className="truncate">{item.label}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      ))}
+    </>
+  );
+
+  const activeLabel = navGroups.flatMap((group) => group.items).find((item) => item.id === screen)?.label ?? t("app.name");
+
+  // Phones (and narrow desktop windows): drawer navigation with a top bar.
+  if (compactNav) {
+    return (
+      <div className="flex flex-col h-full" style={{ background: "var(--bg)" }}>
+        <header className="mobile-bar">
+          <IconButton label={t("app.name")} onClick={() => setNavOpen(true)}>
+            <Menu size={18} />
+          </IconButton>
+          <p className="font-semibold text-[14px] truncate flex-1">{activeLabel}</p>
+          <IconButton
+            label={t("settings.theme")}
+            onClick={() => void update({ theme: isDark ? "light" : "dark" })}
+          >
+            {isDark ? <Sun size={16} /> : <Moon size={16} />}
+          </IconButton>
+        </header>
+
+        {navOpen ? (
+          <div className="drawer-overlay" onClick={() => setNavOpen(false)}>
+            <aside className="drawer" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-center gap-2.5 px-3.5 py-4">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: "var(--accent)", color: "var(--accent-text)" }}>
+                  <Puzzle size={18} />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-[13.5px] leading-tight truncate">{t("app.name")}</p>
+                  <p className="text-[11px] muted truncate">v{packageJson.version} · local</p>
+                </div>
+              </div>
+              <nav className="flex-1 overflow-y-auto px-2 pb-4">{renderNav(true)}</nav>
+              <div className="px-3 py-3 border-t" style={{ borderColor: "var(--border)" }}>
+                <Badge tone="ok">
+                  <Lock size={10} /> {t("nav.privacy")}
+                </Badge>
+              </div>
+            </aside>
+          </div>
+        ) : null}
+
+        <main className="flex-1 min-w-0 relative overflow-hidden">
+          <div key={`${screen}-${files.join("|")}`} className="h-full">{screens[screen]}</div>
+        </main>
+
+        <Toasts />
+        <OverwriteDialog />
+        <PasswordDialog />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full" style={{ background: "var(--bg)" }}>
       {/* Sidebar */}
@@ -314,29 +420,7 @@ export default function App() {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 pb-3">
-          {navGroups.map((group, index) => (
-            <div key={index}>
-              {group.label && !sidebarCompact ? <p className="nav-group-label">{group.label}</p> : null}
-              {group.items.map((item) => {
-                const active =
-                  screen === item.id ||
-                  (item.id === "pdfToImages" && screen === "pdfToImages") ||
-                  (item.id === "imagesToPdf" && screen === "imagesToPdf");
-                return (
-                  <button
-                    key={item.id}
-                    className="nav-item"
-                    data-active={active}
-                    onClick={() => navigate(item.id)}
-                    title={sidebarCompact ? item.label : undefined}
-                  >
-                    <span className="shrink-0">{item.icon}</span>
-                    {!sidebarCompact ? <span className="truncate">{item.label}</span> : null}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+          {renderNav(!sidebarCompact)}
         </nav>
 
         <div className="px-3 py-3 border-t flex items-center justify-between" style={{ borderColor: "var(--border)" }}>

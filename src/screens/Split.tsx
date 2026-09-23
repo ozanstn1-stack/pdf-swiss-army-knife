@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { FolderOpen, Scissors } from "lucide-react";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { isAndroid, openAnyFile, revealAnyFile } from "../lib/mobile";
 import { Button, Card, Field, Segmented, TextArea, TextInput } from "../components/ui";
 import { DropZone, FileList, InfoStrip, OutputBar } from "../components/files";
 import { OptionCard, Screen, TwoColumn } from "../components/layout";
@@ -74,6 +74,7 @@ export function Split({ initialFiles, dragging }: { initialFiles?: string[]; dra
         session.password || undefined,
       );
       setParts(result.parts);
+      await session.publish(result.parts.map((part) => part.path));
       return {
         path: `${result.parts.length ? result.parts[0].path : session.outputDir}`,
         pageCount: result.parts.length,
@@ -157,9 +158,9 @@ export function Split({ initialFiles, dragging }: { initialFiles?: string[]; dra
                   <Button
                     size="sm"
                     icon={<FolderOpen size={14} />}
-                    onClick={() => void openPath(parts[0] ? parts[0].path : session.outputDir).catch(() => undefined)}
+                    onClick={() => void revealAnyFile(parts[0] ? parts[0].path : session.outputDir).catch(() => undefined)}
                   >
-                    {t("common.openFolder")}
+                    {isAndroid() ? t("common.share") : t("common.openFolder")}
                   </Button>
                 </div>
                 <div className="flex flex-col gap-1 max-h-[280px] overflow-y-auto">
@@ -167,7 +168,7 @@ export function Split({ initialFiles, dragging }: { initialFiles?: string[]; dra
                     <button
                       key={part.path}
                       className="text-left text-[13px] px-2.5 py-1.5 rounded-lg hover:bg-[var(--surface-2)] truncate"
-                      onClick={() => void openPath(part.path).catch(() => undefined)}
+                      onClick={() => void openAnyFile(part.path).catch(() => undefined)}
                       title={part.path}
                     >
                       {part.path.split(/[\\/]/).pop()} <span className="muted">({part.first_page}-{part.last_page})</span>

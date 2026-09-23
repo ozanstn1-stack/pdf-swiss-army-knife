@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, FilePlus2, FolderOpen, ScrollText, Trash2, XCircle } from "lucide-react";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openAnyFile, revealAnyFile } from "../lib/mobile";
 import { Badge, Button, Card, EmptyState, Segmented } from "../components/ui";
 import { Screen } from "../components/layout";
 import { useT } from "../lib/i18n";
@@ -173,13 +173,13 @@ export function History({ onNavigate }: { onNavigate: Navigate }) {
                           if (isPdf(entry.path)) {
                             onNavigate("reader", { files: [entry.path] });
                           } else {
-                            void openPath(entry.path).catch(() => undefined);
+                            void openAnyFile(entry.path).catch(() => undefined);
                           }
                         }}
                       >
                         {t("common.open")}
                       </Button>
-                      <Button size="sm" variant="ghost" icon={<FolderOpen size={13} />} onClick={() => void revealItemInDir(entry.path).catch(() => undefined)} />
+                      <Button size="sm" variant="ghost" icon={<FolderOpen size={13} />} onClick={() => void revealAnyFile(entry.path).catch(() => undefined)} />
                     </div>
                   </td>
                   <td className="muted text-xs">{formatDate(entry.timestamp)}</td>

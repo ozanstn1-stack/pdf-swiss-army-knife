@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { FileImage, FolderOpen, Images, RotateCw } from "lucide-react";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { isAndroid, revealAnyFile } from "../lib/mobile";
 import { Button, Card, Field, Segmented, Select, Slider, Toggle } from "../components/ui";
 import { DropZone, FileList, InfoStrip, OutputBar, ResultCard } from "../components/files";
 import { OptionCard, Screen, TwoColumn } from "../components/layout";
@@ -73,6 +73,7 @@ function PdfToImages({ initialFiles, dragging }: { initialFiles?: string[]; drag
         jobId,
       });
       setFiles(result.files);
+      await session.publish(result.files.map((file) => file.path));
       return {
         path: result.files[0]?.path ?? session.outputDir,
         pageCount: result.files.length,
@@ -105,9 +106,9 @@ function PdfToImages({ initialFiles, dragging }: { initialFiles?: string[]; drag
                   <Button
                     size="sm"
                     icon={<FolderOpen size={14} />}
-                    onClick={() => void openPath(files[0]?.path ?? "").catch(() => undefined)}
+                    onClick={() => void revealAnyFile(files[0]?.path ?? "").catch(() => undefined)}
                   >
-                    {t("common.openFolder")}
+                    {isAndroid() ? t("common.share") : t("common.openFolder")}
                   </Button>
                 </div>
                 <div className="flex flex-col gap-1 max-h-[240px] overflow-y-auto text-[13px]">

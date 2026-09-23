@@ -14,12 +14,15 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
-        .manage(JobRegistry::default())
+        .plugin(tauri_plugin_android_fs::init())
+        .manage(JobRegistry::default());
+
+    builder
         .setup(|app| {
             // Teach pdfcore where the bundled engines live. Both layouts are
             // covered: <install>/resources/engines (bundler default) and
@@ -35,8 +38,25 @@ pub fn run() {
                     }
                 }
             }
+            // Android: engines ship inside the APK. The native libraries live
+            // in the app's lib directory (found by pdfcore) and the OCR models
+            // are copied to the private files directory by the Android shell.
+            #[cfg(target_os = "android")]
+            {
+                if let Ok(data_dir) = app.path().app_config_dir() {
+                    pdfcore::engines::set_files_dir(data_dir.join("files"));
+                }
+                if let Ok(cache_dir) = app.path().app_cache_dir() {
+                    let tmp = cache_dir.join("tmp");
+                    let _ = std::fs::create_dir_all(&tmp);
+                    // Android has no /tmp; tesseract and the temp-file helpers
+                    // both honor TMPDIR, and child processes inherit it.
+                    std::env::set_var("TMPDIR", &tmp);
+                }
+            }
             // Development/screenshot hook: keep the window above others so
             // automated captures are deterministic. No effect in normal use.
+            #[cfg(desktop)]
             if std::env::var("PDFSAK_ALWAYS_ON_TOP").is_ok() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_always_on_top(true);
@@ -44,6 +64,7 @@ pub fn run() {
             }
             // Fit the default window to the actual monitor so the layout is
             // never larger than the screen (laptops, high-DPI displays).
+            #[cfg(desktop)]
             if let Some(window) = app.get_webview_window("main") {
                 let monitor = window
                     .current_monitor()
@@ -108,6 +129,7 @@ pub fn run() {
             commands::add_recent,
             commands::clear_recent,
             commands::output_exists,
+            commands::ensure_dir,
             commands::suggest_output,
             commands::file_sizes,
             commands::dev_launch_context,

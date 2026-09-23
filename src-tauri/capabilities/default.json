@@ -20,6 +20,15 @@
     "opener:allow-open-url",
     "opener:allow-reveal-item-in-dir",
     "os:allow-platform",
-    "os:allow-version"
+    "os:allow-version",
+    "android-fs:default",
+    {
+      "identifier": "android-fs:scope",
+      "allow": ["$APPDATA/**", "$APPCACHE/**", "$DOCUMENT/**", "$DOWNLOAD/**", "$TEMP/**"]
+    },
+    {
+      "identifier": "android-fs:allow-copy-file",
+      "allow": ["$APPDATA/**", "$APPCACHE/**", "$DOCUMENT/**", "$TEMP/**"]
+    }
   ]
 }

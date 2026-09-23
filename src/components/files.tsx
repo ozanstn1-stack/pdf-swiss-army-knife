@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -23,6 +22,14 @@ import { useOverwritePrompt, usePasswordPrompt, useToasts } from "../lib/store";
 import { useProgressPercent, type ToolSession } from "../lib/useTool";
 import type { OpResult, PdfInfo, SelectedFile } from "../lib/types";
 import { checkPassword } from "../lib/api";
+import {
+  isAndroid,
+  openAnyFile,
+  pickAndroidFiles,
+  pickAndroidFolder,
+  pickAndroidSaveTarget,
+  revealAnyFile,
+} from "../lib/mobile";
 
 // ---------------------------------------------------------------------------
 // Drop zone
@@ -54,6 +61,11 @@ export function DropZone({
         : [{ name: "PDF & Images", extensions: ["pdf", "jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"] }];
 
   const handleBrowse = async () => {
+    if (isAndroid()) {
+      const paths = await pickAndroidFiles({ multiple, accept }).catch(() => []);
+      if (paths.length) onPaths(paths);
+      return;
+    }
     const picked = await open({ multiple, filters });
     if (!picked) return;
     onPaths(Array.isArray(picked) ? picked.map(String) : [String(picked)]);
@@ -79,8 +91,8 @@ export function DropZone({
         <FolderOpen size={compact ? 20 : 26} />
       </div>
       <div>
-        <p className="font-semibold text-[15px]">{title ?? t("common.dropHere")}</p>
-        <p className="text-sm muted mt-1">{hint ?? t("common.dropHint")}</p>
+        <p className="font-semibold text-[15px]">{title ?? (isAndroid() ? t("common.selectFiles") : t("common.dropHere"))}</p>
+        <p className="text-sm muted mt-1">{hint ?? (isAndroid() ? t("common.tapHint") : t("common.dropHint"))}</p>
       </div>
       <Button
         variant="primary"
@@ -319,6 +331,11 @@ export function OutputBar({
   const percent = useProgressPercent(session.progress);
 
   const chooseFile = async () => {
+    if (isAndroid()) {
+      const target = await pickAndroidSaveTarget(fileBaseName(session.outputPath) || "document.pdf").catch(() => null);
+      session.setAndroidTarget(target ? { file: target } : null);
+      return;
+    }
     const picked = await open({
       multiple: false,
       directory: false,
@@ -330,9 +347,16 @@ export function OutputBar({
   };
 
   const chooseFolder = async () => {
+    if (isAndroid()) {
+      const target = await pickAndroidFolder().catch(() => null);
+      session.setAndroidTarget(target ? { dir: target } : null);
+      return;
+    }
     const picked = await open({ multiple: false, directory: true, title: t("common.chooseFolder") });
     if (picked) session.setOutputDir(String(picked));
   };
+
+  const androidTargetName = session.androidTarget?.file?.name ?? session.androidTarget?.dir?.name ?? null;
 
   return (
     <Card className="p-4 flex flex-col gap-3">
@@ -343,7 +367,7 @@ export function OutputBar({
             <TextInput value={session.outputPath} onChange={(event) => session.setOutputPath(event.target.value)} spellCheck={false} />
           </div>
           <Button variant="ghost" size="md" icon={<FolderOpen size={15} />} onClick={() => void chooseFile()}>
-            {t("common.browse")}
+            {isAndroid() ? t("common.saveAs") : t("common.browse")}
           </Button>
         </div>
       ) : (
@@ -353,10 +377,18 @@ export function OutputBar({
             <TextInput value={session.outputDir} onChange={(event) => session.setOutputDir(event.target.value)} spellCheck={false} />
           </div>
           <Button variant="ghost" size="md" icon={<FolderOpen size={15} />} onClick={() => void chooseFolder()}>
-            {t("common.browse")}
+            {isAndroid() ? t("common.saveAs") : t("common.browse")}
           </Button>
         </div>
       )}
+
+      {isAndroid() ? (
+        <p className="text-xs muted">
+          {androidTargetName
+            ? t("common.androidChosenDestination", { name: androidTargetName })
+            : t("common.androidDefaultDestination")}
+        </p>
+      ) : null}
 
       {showOverwrite ? (
         <div className="flex items-center gap-2 text-[13px]">
@@ -420,10 +452,10 @@ export function OutputBar({
 export function ResultCard({ result, onReset }: { result: OpResult; onReset?: () => void }) {
   const t = useT();
   const reveal = useCallback(() => {
-    void revealItemInDir(result.path).catch(() => undefined);
+    void revealAnyFile(result.path).catch(() => undefined);
   }, [result.path]);
   const open = useCallback(() => {
-    void openPath(result.path).catch(() => undefined);
+    void openAnyFile(result.path).catch(() => undefined);
   }, [result.path]);
 
   return (
@@ -447,7 +479,7 @@ export function ResultCard({ result, onReset }: { result: OpResult; onReset?: ()
           {t("common.openFile")}
         </Button>
         <Button size="sm" variant="ghost" icon={<FolderOpen size={14} />} onClick={reveal}>
-          {t("common.openFolder")}
+          {isAndroid() ? t("common.share") : t("common.openFolder")}
         </Button>
         {onReset ? (
           <IconButton label={t("common.close")} onClick={onReset}>

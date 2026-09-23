@@ -13,7 +13,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { isAndroid, openAnyFile, revealAnyFile, saveFileOnAndroid } from "../lib/mobile";
 import { Badge, Button, Card, EmptyState, IconButton, Spinner, TextInput } from "../components/ui";
 import { Screen } from "../components/layout";
 import { useT } from "../lib/i18n";
@@ -96,16 +96,23 @@ export function AiLibrary({ onOpenAi }: { onOpenAi: () => void }) {
   };
 
   const exportEntry = async (entry: AiLibraryEntry) => {
-    const picked = await saveDialog({
-      title: t("common.save"),
-      defaultPath: entry.sourceName.replace(/\.pdf$/i, "") + `_${entry.kind}.md`,
-      filters: [
-        { name: "Markdown", extensions: ["md"] },
-        { name: "Text", extensions: ["txt"] },
-      ],
-    });
-    if (!picked) return;
+    const defaultName = entry.sourceName.replace(/\.pdf$/i, "") + `_${entry.kind}.md`;
     try {
+      if (isAndroid()) {
+        const saved = await saveFileOnAndroid(entry.filePath, defaultName);
+        if (!saved) return;
+        pushToast({ kind: "success", title: t("library.exported"), detail: saved });
+        return;
+      }
+      const picked = await saveDialog({
+        title: t("common.save"),
+        defaultPath: defaultName,
+        filters: [
+          { name: "Markdown", extensions: ["md"] },
+          { name: "Text", extensions: ["txt"] },
+        ],
+      });
+      if (!picked) return;
       const path = await aiLibraryExport(entry.id, String(picked));
       pushToast({ kind: "success", title: t("library.exported"), detail: path });
     } catch (error) {
@@ -123,6 +130,7 @@ export function AiLibrary({ onOpenAi }: { onOpenAi: () => void }) {
   };
 
   const pickDirectory = async () => {
+    if (isAndroid()) return;
     const picked = await openDialog({ directory: true, multiple: false, title: t("library.chooseFolder") });
     if (picked) setDirectory(String(picked));
   };
@@ -133,9 +141,11 @@ export function AiLibrary({ onOpenAi }: { onOpenAi: () => void }) {
       subtitle={t("library.subtitle")}
       actions={
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="ghost" icon={<FolderOpen size={14} />} onClick={() => void openPath(directory).catch(() => undefined)} disabled={!directory}>
-            {t("common.openFolder")}
-          </Button>
+          {!isAndroid() ? (
+            <Button size="sm" variant="ghost" icon={<FolderOpen size={14} />} onClick={() => void openAnyFile(directory).catch(() => undefined)} disabled={!directory}>
+              {t("common.openFolder")}
+            </Button>
+          ) : null}
           <Button size="sm" variant="ghost" icon={<Sparkles size={14} />} onClick={onOpenAi}>
             {t("nav.ai")}
           </Button>
@@ -149,9 +159,11 @@ export function AiLibrary({ onOpenAi }: { onOpenAi: () => void }) {
         <span className="text-xs muted">
           {t("library.folder")}: <strong className="text-[var(--text)]">{directory || "—"}</strong>
         </span>
-        <Button size="sm" variant="ghost" onClick={() => void pickDirectory()}>
-          {t("library.changeFolder")}
-        </Button>
+        {!isAndroid() ? (
+          <Button size="sm" variant="ghost" onClick={() => void pickDirectory()}>
+            {t("library.changeFolder")}
+          </Button>
+        ) : null}
         <span className="ml-auto flex items-center gap-2">
           <div className="relative">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 muted" />
@@ -253,10 +265,10 @@ export function AiLibrary({ onOpenAi }: { onOpenAi: () => void }) {
                   <Button size="sm" icon={<Download size={14} />} onClick={() => void exportEntry(selected)}>
                     {t("library.exportAs")}
                   </Button>
-                  <IconButton label={t("common.openFile")} onClick={() => void openPath(selected.filePath).catch(() => undefined)}>
+                  <IconButton label={t("common.openFile")} onClick={() => void openAnyFile(selected.filePath).catch(() => undefined)}>
                     <BookOpenCheck size={15} />
                   </IconButton>
-                  <IconButton label={t("common.openFolder")} onClick={() => void revealItemInDir(selected.filePath).catch(() => undefined)}>
+                  <IconButton label={isAndroid() ? t("common.share") : t("common.openFolder")} onClick={() => void revealAnyFile(selected.filePath).catch(() => undefined)}>
                     <FolderOpen size={15} />
                   </IconButton>
                   <IconButton label={t("common.delete")} onClick={() => void removeEntry(selected)}>

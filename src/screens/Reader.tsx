@@ -10,7 +10,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openAnyFile } from "../lib/mobile";
 import { Badge, Button, IconButton, Spinner, useDebounced } from "../components/ui";
 import { DropZone, InfoStrip } from "../components/files";
 import { Screen } from "../components/layout";
@@ -412,7 +412,7 @@ export function Reader({ initialFiles, dragging }: { initialFiles?: string[]; dr
             <IconButton label={t("reader.copyText")} onClick={() => void copyPage()}>
               <Copy size={15} />
             </IconButton>
-            <IconButton label={t("reader.openExternal")} onClick={() => void openPath(session.primary!.path).catch(() => undefined)}>
+            <IconButton label={t("reader.openExternal")} onClick={() => void openAnyFile(session.primary!.path).catch(() => undefined)}>
               <ExternalLink size={15} />
             </IconButton>
           </div>

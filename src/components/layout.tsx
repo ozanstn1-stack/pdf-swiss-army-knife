@@ -13,9 +13,9 @@ export function Screen({
 }) {
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
-      <div className="mx-auto px-7 py-6 flex flex-col gap-5" style={{ maxWidth: 1180 }}>
-        <header className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
+      <div className="screen-content mx-auto px-7 py-6 flex flex-col gap-5" style={{ maxWidth: 1180 }}>
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
             <h1 className="text-[21px] font-bold tracking-tight leading-tight">{title}</h1>
             {subtitle ? <p className="muted text-[13.5px] mt-1">{subtitle}</p> : null}
           </div>

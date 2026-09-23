@@ -5,8 +5,10 @@ target/
 
 # build output
 dist/
-src-tauri/gen/
 release-artifacts/
+# the Android project is committed (see gen/android/.gitignore for its
+# build outputs); only the regenerated ACL schemas stay ignored
+src-tauri/gen/schemas/
 *.exe
 *.msi
 *.nsis.zip
@@ -14,6 +16,9 @@ release-artifacts/
 # engine binaries fetched at build time (not committed; see scripts/fetch-engines.ps1)
 # the bundled font (PT Sans, OFL) IS committed so builds are reproducible offline
 src-tauri/resources/engines/
+# Android engines + OCR models fetched by scripts/fetch-engines-android.ps1
+src-tauri/resources/engines-android/
+src-tauri/resources/android-assets/
 
 # logs / temp
 *.log
