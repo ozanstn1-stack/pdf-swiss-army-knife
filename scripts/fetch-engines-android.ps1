@@ -45,7 +45,9 @@ function Find-NdkStrip {
     $candidates = @()
     if ($env:ANDROID_NDK_HOME) { $candidates += $env:ANDROID_NDK_HOME }
     if ($env:NDK_HOME) { $candidates += $env:NDK_HOME }
-    foreach ($sdkRoot in @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT, (Join-Path $env:LOCALAPPDATA 'Android\Sdk'))) {
+    $sdkRoots = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT)
+    if ($env:LOCALAPPDATA) { $sdkRoots += (Join-Path $env:LOCALAPPDATA 'Android/Sdk') }
+    foreach ($sdkRoot in $sdkRoots) {
         if (-not $sdkRoot) { continue }
         $ndkRoot = Join-Path $sdkRoot 'ndk'
         if (Test-Path $ndkRoot) {
@@ -150,8 +152,8 @@ foreach ($sub in @('configs', 'tessconfigs')) {
         $tmp = Join-Path $cacheDir 'tesseract-src'
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
         New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-        tar -xzf $tgz -C $tmp --strip-components=3 "tesseract-4.1.0/tessdata/$sub"
-        Copy-Item (Join-Path $tmp $sub) $target -Recurse -Force
+        tar -xzf $tgz -C $tmp
+        Copy-Item (Join-Path $tmp "tesseract-4.1.0/tessdata/$sub") $target -Recurse -Force
     }
 }
 $pdfTtf = Join-Path $tessDataAssets 'pdf.ttf'
