@@ -153,7 +153,7 @@ rendering work without downloads or network access. See
 npm run android:engines     # pdfium + Tesseract CLI + tessdata (once)
 npm run android:build       # release APK (arm64-v8a)  → release-artifacts/
 npm run android:build:all   # arm64-v8a + armeabi-v7a
-adb install -r release-artifacts\pdf-swiss-army-knife-arm64-v8a-app-arm64-release.apk
+adb install -r release-artifacts\PDF-Swiss-Army-Knife-Android-1.4.0-arm64-v8a.apk
 ```
 
 Minimum Android version: 7.0 (API 24). Targets Android 16 (API 36).
@@ -249,7 +249,7 @@ Prefer no installer? Grab `PDF-Swiss-Army-Knife-Portable-<version>.zip`, extract
 **Requirements:** Windows 10/11 x64, WebView2 runtime (preinstalled on current Windows 10/11).
 
 **Android**
-1. Download `pdf-swiss-army-knife-arm64-v8a-app-arm64-release.apk` (or the `armeabi-v7a` one for older devices) from the [latest release](../../releases/latest).
+1. Download `PDF-Swiss-Army-Knife-Android-<version>-arm64-v8a.apk` (or the `armeabi-v7a` one for older devices) from the [latest release](../../releases/latest).
 2. Open it on the device and allow installing apps from your browser/file manager when asked.
 3. Everything is inside the APK: rendering engine, OCR engine and language models.
 
