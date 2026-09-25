@@ -1,0 +1,39 @@
+//! officecore - local-first document engine for Office Swiss Army Knife.
+//!
+//! Handles the document model and the file formats behind the Writer, Calc,
+//! Impress and Tools modules. Everything runs offline on the user's machine;
+//! macros and embedded scripts are never executed, and ZIP/XML inputs are
+//! bounded so hostile documents cannot exhaust memory.
+//!
+//! * `model`     - shared document model (the in-app source of truth)
+//! * `address`   - A1 cell addressing helpers
+//! * `zip`       - hardened ZIP container reader/writer
+//! * `xml`       - OOXML/ODF XML tree helpers
+//! * `pdfcanvas` - vector PDF output with embedded OFL fonts
+
+pub mod address;
+pub mod cleaner;
+pub mod csvio;
+pub mod docx;
+pub mod error;
+pub mod io;
+pub mod layout;
+pub mod model;
+pub mod odf;
+pub mod pdfcanvas;
+pub mod pptx;
+pub mod rtf;
+pub mod textio;
+pub mod xlsx;
+pub mod xml;
+pub mod zip;
+
+pub use error::{ErrorCode, OfficeError, OfficeResult};
+
+/// Semantic version of the office engine.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Human readable summary used by the About/Settings screen.
+pub fn engine_summary() -> String {
+    format!("Office engine {VERSION} (docx, odt, rtf, xlsx, ods, csv, pptx, odp, pdf export)")
+}

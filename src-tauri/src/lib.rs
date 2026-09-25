@@ -5,8 +5,10 @@
 
 mod ai;
 mod commands;
-mod library;
 mod jobs;
+mod library;
+mod office;
+mod office_tools;
 mod secret;
 
 use jobs::JobRegistry;
@@ -158,7 +160,32 @@ pub fn run() {
             commands::load_operations,
             commands::clear_operations,
             commands::log_frontend,
+            office::office_open_document,
+            office::office_save_document,
+            office::office_save_unit,
+            office::office_export_pdf,
+            office::office_convert,
+            office::office_conversion_targets,
+            office::office_clean,
+            office::office_image_footprint,
+            office::store_load,
+            office::store_save,
+            office::store_clear,
+            office::history_push,
+            office::history_list,
+            office::history_load,
+            office::history_clear,
+            office::recovery_save,
+            office::recovery_list,
+            office::recovery_load,
+            office::recovery_discard,
+            office::recovery_discard_all,
+            office_tools::office_images_to_pdf,
+            office_tools::office_pdf_to_images,
+            office_tools::office_pdf_to_text,
+            office_tools::office_pdf_add_form,
+            office_tools::office_pdf_list_form,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running PDF Swiss Army Knife");
+        .expect("error while running Office Swiss Army Knife");
 }

@@ -1,0 +1,27 @@
+[package]
+name = "officecore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Local-first document engine for Office Swiss Army Knife (Writer, Calc, Impress)"
+
+[lib]
+name = "officecore"
+path = "src/lib.rs"
+
+[dependencies]
+ab_glyph = "0.2.32"
+base64 = "0.22"
+calamine = "0.36.1"
+crc32fast = "1"
+flate2 = "1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff", "gif"] }
+lopdf = "0.45.0"
+quick-xml = "0.42.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+uuid = { version = "1.26.1", features = ["v4"] }

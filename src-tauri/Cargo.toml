@@ -27,6 +27,8 @@ serde_json = "1"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 aicore = { path = "../crates/aicore" }
+officecore = { path = "../crates/officecore" }
+lopdf = "0.45.0"
 pdfcore = { path = "../crates/pdfcore" }
 
 [target.'cfg(windows)'.dependencies]
