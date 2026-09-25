@@ -9,6 +9,19 @@ import {
   FileSearch,
   FolderClock,
   FileImage,
+  FilePlus2,
+  FileSpreadsheet,
+  FileText,
+  Presentation,
+  LayoutGrid,
+  LayoutTemplate,
+  NotebookPen,
+  CalendarDays,
+  Database,
+  PenTool,
+  Repeat,
+  Sparkles,
+  ClipboardList,
   Home,
   Images,
   Info,
@@ -54,6 +67,10 @@ import { InfoScreen } from "./screens/Info";
 import { OverwriteDialog, PasswordDialog, Toasts } from "./components/files";
 import { Badge, IconButton } from "./components/ui";
 import { isAndroid, pickAndroidFiles } from "./lib/mobile";
+import { OfficeWorkspace } from "./office/OfficeWorkspace";
+import { CleanerScreen, ConverterScreen, DataScreen, DrawScreen, NotesScreen, PdfFormsScreen, PlannerScreen, TemplatesScreen } from "./office/ToolsScreens";
+import { useOfficeTabs } from "./lib/office-store";
+import * as officeApi from "./lib/office-api";
 
 type PageToolTab = "extract" | "delete" | "rotate" | "resize" | "crop" | "numbering";
 
@@ -140,7 +157,7 @@ export default function App() {
 
   // Keep the native window chrome in sync with the selected theme.
   useEffect(() => {
-    const resolved = settings.theme === "system" ? (document.documentElement.classList.contains("dark") ? "dark" : "light") : settings.theme;
+    const resolved: "dark" | "light" = settings.theme === "system" ? (document.documentElement.classList.contains("dark") ? "dark" : "light") : settings.theme === "paper" ? "light" : "dark";
     void import("@tauri-apps/api/window")
       .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(resolved))
       .catch(() => undefined);
@@ -252,6 +269,18 @@ export default function App() {
       history: <History onNavigate={navigate} />,
       settings: <Settings />,
       info: <InfoScreen initialFiles={files} />,
+      office: <OfficeWorkspace />,
+      documents: <OfficeLauncher kind="writer" onOpen={() => navigate("office")} />,
+      spreadsheets: <OfficeLauncher kind="calc" onOpen={() => navigate("office")} />,
+      presentations: <OfficeLauncher kind="impress" onOpen={() => navigate("office")} />,
+      notes: <NotesScreen />,
+      templates: <TemplatesScreen />,
+      converter: <ConverterScreen />,
+      cleaner: <CleanerScreen />,
+      draw: <DrawScreen />,
+      planner: <PlannerScreen />,
+      data: <DataScreen />,
+      pdfForms: <PdfFormsScreen />,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [convertTab, dragging, files, homeDrop, navigate, pageToolTab, securityTab],
@@ -261,7 +290,34 @@ export default function App() {
     {
       items: [
         { id: "home", label: t("nav.home"), icon: <Home size={16} /> },
+        { id: "office", label: t("nav.office"), icon: <LayoutGrid size={16} /> },
         { id: "reader", label: t("nav.reader"), icon: <BookOpen size={16} /> },
+      ],
+    },
+    {
+      label: t("nav.office"),
+      items: [
+        { id: "documents", label: t("nav.documents"), icon: <FileText size={16} /> },
+        { id: "spreadsheets", label: t("nav.spreadsheets"), icon: <FileSpreadsheet size={16} /> },
+        { id: "presentations", label: t("nav.presentations"), icon: <Presentation size={16} /> },
+        { id: "templates", label: t("nav.templates"), icon: <LayoutTemplate size={16} /> },
+      ],
+    },
+    {
+      label: t("nav.office"),
+      items: [
+        { id: "notes", label: t("nav.notes"), icon: <NotebookPen size={16} /> },
+        { id: "planner", label: t("nav.planner"), icon: <CalendarDays size={16} /> },
+        { id: "data", label: t("nav.data"), icon: <Database size={16} /> },
+        { id: "draw", label: t("nav.draw"), icon: <PenTool size={16} /> },
+      ],
+    },
+    {
+      label: t("nav.convert"),
+      items: [
+        { id: "converter", label: t("nav.converter"), icon: <Repeat size={16} /> },
+        { id: "cleaner", label: t("nav.cleaner"), icon: <Sparkles size={16} /> },
+        { id: "pdfForms", label: t("nav.pdfForms"), icon: <ClipboardList size={16} /> },
       ],
     },
     {
@@ -466,3 +522,69 @@ export default function App() {
 }
 
 
+
+interface OfficeLauncherProps {
+  kind: "writer" | "calc" | "impress";
+  onOpen: () => void;
+}
+
+const OFFICE_EXTENSIONS: Record<OfficeLauncherProps["kind"], string[]> = {
+  writer: ["docx", "odt", "rtf", "txt", "md"],
+  calc: ["xlsx", "xls", "ods", "csv", "tsv"],
+  impress: ["pptx", "odp"],
+};
+
+function OfficeLauncher({ kind, onOpen }: OfficeLauncherProps) {
+  const t = useT();
+  const recent = useRecent((state) => state.entries);
+  const refreshRecent = useRecent((state) => state.refresh);
+
+  useEffect(() => {
+    void refreshRecent();
+  }, [refreshRecent]);
+
+  const openPath = async (path: string) => {
+    try {
+      const result = await officeApi.openDocument(path);
+      useOfficeTabs.getState().open({ kind: result.kind, title: result.title, path: result.path, model: result.model as never, warnings: result.warnings });
+      onOpen();
+    } catch (error) {
+      useToasts.getState().push({ kind: "error", title: t("errors.title"), detail: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  const related = recent.filter((entry) => OFFICE_EXTENSIONS[kind].includes((entry.path.split(".").pop() ?? "").toLowerCase()));
+
+  return (
+    <div className="screen">
+      <div className="screen-head">
+        <div>
+          <h1>{t(kind === "writer" ? "nav.documents" : kind === "calc" ? "nav.spreadsheets" : "nav.presentations")}</h1>
+          <p className="muted">{t("office.noTabsHint")}</p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => {
+            useOfficeTabs.getState().create(kind);
+            onOpen();
+          }}
+        >
+          <FilePlus2 size={16} /> {t("office.noTabs")}
+        </button>
+      </div>
+      <div className="card">
+        <h3>{t("home.recent")}</h3>
+        {related.length === 0 ? <p className="muted">{t("converter.noFiles")}</p> : null}
+        <div className="stack">
+          {related.map((entry) => (
+            <button key={entry.path} type="button" className="row recent-row" onClick={() => void openPath(entry.path)}>
+              <span className="grow">{entry.path.split(/[\\/]/).pop()}</span>
+              <span className="muted">{entry.path}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

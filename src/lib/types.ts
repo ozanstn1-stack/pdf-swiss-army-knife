@@ -260,7 +260,7 @@ export type SplitMode =
   | { mode: "at_pages"; pages: number[] };
 
 export interface Settings {
-  theme: "dark" | "light" | "system";
+  theme: "dark" | "light" | "system" | "midnight" | "paper";
   language: "en" | "tr";
   defaultOutputDir: string;
   defaultCompression: "low" | "medium" | "high";
@@ -275,6 +275,18 @@ export interface Settings {
   aiLibraryDir: string;
   /** Keep an operation log (paths and sizes only). */
   keepOperationLog: boolean;
+  /** Autosave interval for office documents: 0 = off. */
+  autosaveSeconds: number;
+  /** Keep local version history snapshots on save. */
+  versionHistory: boolean;
+  /** Default save format when creating a new Writer document. */
+  defaultWriterFormat: "docx" | "odt";
+  /** Default save format when creating a new Calc workbook. */
+  defaultCalcFormat: "xlsx" | "ods";
+  /** Default save format when creating a new Impress deck. */
+  defaultImpressFormat: "pptx" | "odp";
+  /** Show the unsupported-feature warnings after opening a document. */
+  showImportWarnings: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -290,6 +302,12 @@ export const DEFAULT_SETTINGS: Settings = {
   aiAutoSave: true,
   aiLibraryDir: "",
   keepOperationLog: true,
+  autosaveSeconds: 30,
+  versionHistory: true,
+  defaultWriterFormat: "docx",
+  defaultCalcFormat: "xlsx",
+  defaultImpressFormat: "pptx",
+  showImportWarnings: true,
 };
 
 export interface TextMatch {

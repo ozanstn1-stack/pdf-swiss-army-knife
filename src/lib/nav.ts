@@ -19,7 +19,19 @@ export type ScreenId =
   | "batch"
   | "history"
   | "settings"
-  | "info";
+  | "info"
+  | "office"
+  | "documents"
+  | "spreadsheets"
+  | "presentations"
+  | "notes"
+  | "templates"
+  | "converter"
+  | "cleaner"
+  | "draw"
+  | "planner"
+  | "data"
+  | "pdfForms";
 
 export interface PageToolsTab {
   tab: "extract" | "delete" | "rotate" | "resize" | "crop" | "numbering";

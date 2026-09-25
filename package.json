@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.4.0",
   "type": "module",
-  "description": "PDF Swiss Army Knife - local-first desktop PDF toolkit",
+  "description": "Office Swiss Army Knife - local-first desktop office and PDF suite (Writer, Calc, Impress, PDF tools)",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

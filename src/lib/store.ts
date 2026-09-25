@@ -62,8 +62,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
 export function applyTheme(theme: Settings["theme"]) {
   const root = document.documentElement;
   const prefersDark =
-    theme === "system" ? window.matchMedia("(prefers-color-scheme: dark)").matches : theme === "dark";
+    theme === "system"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+      : theme === "dark" || theme === "midnight";
   root.classList.toggle("dark", prefersDark);
+  root.dataset.theme = theme === "system" ? (prefersDark ? "dark" : "light") : theme;
 }
 
 // ---------------------------------------------------------------------------
