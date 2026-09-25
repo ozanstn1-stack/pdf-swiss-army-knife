@@ -82,8 +82,13 @@ jobs:
 
       - name: Collect APKs
         run: |
+          set -e
           mkdir -p release-artifacts
-          find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -exec cp {} release-artifacts/ \;
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cp "$(find src-tauri/gen/android/app/build/outputs/apk/arm64/release -name '*.apk' | head -n1)" \
+             "release-artifacts/PDF-Swiss-Army-Knife-Android-$version-arm64-v8a.apk"
+          cp "$(find src-tauri/gen/android/app/build/outputs/apk/arm/release -name '*.apk' | head -n1)" \
+             "release-artifacts/PDF-Swiss-Army-Knife-Android-$version-armeabi-v7a.apk"
           ls -lh release-artifacts
 
       - name: Upload APKs
