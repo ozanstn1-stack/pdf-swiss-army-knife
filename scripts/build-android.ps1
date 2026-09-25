@@ -26,6 +26,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# `powershell -File script.ps1 -Abi a,b` passes "a,b" as a single string, so
+# accept both forms.
+$Abi = @($Abi | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
 $root = Split-Path -Parent $PSScriptRoot
 $tauriDir = Join-Path $root 'src-tauri'
 $genDir = Join-Path $tauriDir 'gen\android'

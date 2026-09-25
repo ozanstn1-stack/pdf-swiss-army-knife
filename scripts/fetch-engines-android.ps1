@@ -18,6 +18,10 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# `powershell -File script.ps1 -Abis a,b` passes "a,b" as a single string, so
+# accept both forms.
+$Abis = @($Abis | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
 $root = Split-Path -Parent $PSScriptRoot
 $enginesDir = Join-Path $root 'src-tauri/resources/engines-android'
 $assetsDir = Join-Path $root 'src-tauri/resources/android-assets/tessdata'
