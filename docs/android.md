@@ -99,6 +99,28 @@ the public Downloads folder.
   same preprocessing pipeline, same output modes (searchable PDF, text,
   Markdown).
 
+## Signing
+
+Release APKs must be signed to be installable. `app/build.gradle.kts` reads
+`src-tauri/gen/android/keystore.properties` when it exists (both the file and
+the keystore are gitignored) and otherwise falls back to the local debug
+keystore, so a `-Debug` or quick release build still installs.
+
+The official release keystore (`pdfsak-release.jks`) is backed up as GitHub
+Actions secrets, and the workflow recreates the properties file before
+building, so CI and local builds produce APKs with the same signature and
+users can update over an existing install:
+
+| Secret | Content |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | `base64 pdfsak-release.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | store password |
+| `ANDROID_KEY_ALIAS` | `pdfsak` |
+| `ANDROID_KEY_PASSWORD` | key password (same as the store password for PKCS#12) |
+
+Keep a copy of the keystore and its passwords somewhere safe: losing them
+means users have to uninstall the app before installing an update.
+
 ## CI
 
 `.github/workflows/android.yml` builds the APKs on every version tag (and on
