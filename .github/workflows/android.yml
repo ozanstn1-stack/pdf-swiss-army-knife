@@ -78,20 +78,25 @@ jobs:
       - name: Fetch Android engines
         run: pwsh -NoProfile -File scripts/fetch-engines-android.ps1 -Abis arm64-v8a,armeabi-v7a
 
+      # The Tauri CLI builds the "universal" flavor restricted to the requested
+      # target, so each run overwrites the previous APK - collect per target.
       - name: Build arm64 APK
-        run: npm run tauri android build -- --apk --ci --target aarch64
-
-      - name: Build armv7 APK
-        run: npm run tauri android build -- --apk --ci --target armv7
-
-      - name: Collect APKs
         run: |
           set -e
+          npm run tauri android build -- --apk --ci --target aarch64
           mkdir -p release-artifacts
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          cp "$(find src-tauri/gen/android/app/build/outputs/apk/arm64/release -name '*.apk' | head -n1)" \
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -printf '%T@ %p\n' | sort -rn | head -n1 | cut -d' ' -f2)
+          cp "$apk" \
              "release-artifacts/PDF-Swiss-Army-Knife-Android-$version-arm64-v8a.apk"
-          cp "$(find src-tauri/gen/android/app/build/outputs/apk/arm/release -name '*.apk' | head -n1)" \
+
+      - name: Build armv7 APK
+        run: |
+          set -e
+          npm run tauri android build -- --apk --ci --target armv7
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -printf '%T@ %p\n' | sort -rn | head -n1 | cut -d' ' -f2)
+          cp "$apk" \
              "release-artifacts/PDF-Swiss-Army-Knife-Android-$version-armeabi-v7a.apk"
           ls -lh release-artifacts
 
