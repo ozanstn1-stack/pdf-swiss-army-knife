@@ -23,6 +23,7 @@
 //! * `engines`   - engine discovery (pdfium.dll, qpdf.exe, tesseract.exe)
 
 pub mod annotate;
+pub mod compare;
 pub mod compress;
 pub mod convert;
 pub mod docutil;
@@ -30,6 +31,7 @@ pub mod engines;
 pub mod error;
 pub mod images;
 pub mod info;
+pub mod inspect;
 pub mod merge;
 pub mod metadata;
 pub mod numbering;

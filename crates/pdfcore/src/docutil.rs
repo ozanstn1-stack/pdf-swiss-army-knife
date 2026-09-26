@@ -469,6 +469,50 @@ pub fn wrap_page_content_transform(
 
 /// Ensures the page has its own Resources dictionary (cloned when shared), so
 /// adding fonts/XObjects/ExtGState never leaks into other pages.
+
+/// The image XObjects a page draws from, whichever way they are stored.
+///
+/// A page's `/Resources` may be inline on the page, behind a reference, or
+/// inherited from an ancestor page node, and the `/XObject` sub-dictionary may
+/// itself be behind a reference. Every consumer that walks a page's images -
+/// the inspector, the compressor, redaction - needs all four cases handled, and
+/// getting it wrong means silently seeing zero images.
+pub fn page_xobjects(doc: &Document, page_id: ObjectId) -> Vec<ObjectId> {
+    let resolve = |value: Option<&Object>| -> Option<Dictionary> {
+        match value? {
+            Object::Reference(id) => match doc.get_object(*id) {
+                Ok(Object::Dictionary(dictionary)) => Some(dictionary.clone()),
+                _ => None,
+            },
+            Object::Dictionary(dictionary) => Some(dictionary.clone()),
+            _ => None,
+        }
+    };
+    let resources = match doc.get_page_resources(page_id) {
+        Ok((Some(resources), _)) => resources.clone(),
+        _ => match doc.get_object(page_id) {
+            Ok(Object::Dictionary(page)) => match resolve(page.get(b"Resources").ok()) {
+                Some(value) => value,
+                None => return Vec::new(),
+            },
+            _ => return Vec::new(),
+        },
+    };
+    let list = match resolve(resources.get(b"XObject").ok()) {
+        Some(value) => value,
+        None => return Vec::new(),
+    };
+    let mut out: Vec<ObjectId> = Vec::new();
+    for (_, value) in list.iter() {
+        if let Object::Reference(id) = value {
+            if !out.contains(id) {
+                out.push(*id);
+            }
+        }
+    }
+    out
+}
+
 pub fn own_page_resources(doc: &mut Document, page_id: ObjectId) -> PdfResult<ObjectId> {
     materialize_inherited_attrs(doc, page_id)?;
     let existing = {

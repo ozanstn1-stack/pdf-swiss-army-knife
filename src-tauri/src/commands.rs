@@ -1100,6 +1100,132 @@ pub async fn annotate_pdf(
 }
 
 // ---------------------------------------------------------------------------
+// Redaction
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactRequest {
+    pub input: String,
+    pub output: OutputSpec,
+    pub areas: Vec<pdfcore::redact::RedactionArea>,
+    pub options: pdfcore::redact::RedactionOptions,
+    #[serde(default)]
+    pub password: Option<String>,
+    pub job_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn redact_pdf(
+    app: AppHandle,
+    registry: State<'_, JobRegistry>,
+    request: RedactRequest,
+) -> Result<OpResult, PdfError> {
+    operation_with_progress(app, registry, request.job_id.clone(), move |progress, cancel| {
+        let (output, policy) = request.output.resolve()?;
+        let result = pdfcore::redact::redact_pdf(
+            Path::new(&request.input),
+            &output,
+            &request.areas,
+            &request.options,
+            policy,
+            request.password.as_deref(),
+            progress,
+            cancel,
+        )?;
+        let message = if result.characters_removed == 0 && result.unmatched_areas > 0 {
+            Some(format!("{} area(s) did not match any text.", result.unmatched_areas))
+        } else {
+            None
+        };
+        Ok(OpResult {
+            path: result.output.clone(),
+            page_count: None,
+            original_bytes: None,
+            output_bytes: Some(std::fs::metadata(&result.output).map(|m| m.len()).unwrap_or(0)),
+            reduction: None,
+            message,
+        })
+    })
+    .await
+}
+
+/// Patterns found on one page, so the UI can show the user what it is about to
+/// remove and let them deselect any of it.
+#[tauri::command]
+pub async fn detect_sensitive_text(
+    path: String,
+    page: u32,
+    password: Option<String>,
+) -> Result<Vec<pdfcore::redact::RedactionMatch>, PdfError> {
+    run_blocking(move || {
+        let cancel = CancelToken::new();
+        let (pages, _) = pdfcore::textbox::page_chars(
+            Path::new(&path),
+            password.as_deref(),
+            &[page],
+            1,
+            &cancel,
+            &|_, _| {},
+        )?;
+        let chars = pages.get(&page).ok_or_else(|| {
+            PdfError::Internal(format!("page {page} has no extractable text"))
+        })?;
+        Ok(pdfcore::redact::detect_sensitive(chars))
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Compare
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareRequest {
+    pub left: String,
+    pub right: String,
+    #[serde(default)]
+    pub left_password: Option<String>,
+    #[serde(default)]
+    pub right_password: Option<String>,
+    pub options: pdfcore::compare::CompareOptions,
+    pub job_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn compare_pdfs(
+    app: AppHandle,
+    registry: State<'_, JobRegistry>,
+    request: CompareRequest,
+) -> Result<pdfcore::compare::CompareReport, PdfError> {
+    operation_with_progress(app, registry, request.job_id.clone(), move |progress, cancel| {
+        pdfcore::compare::compare_pdfs(
+            Path::new(&request.left),
+            Path::new(&request.right),
+            request.left_password.as_deref(),
+            request.right_password.as_deref(),
+            &request.options,
+            progress,
+            cancel,
+        )
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Inspector
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn inspect_document(
+    path: String,
+    password: Option<String>,
+) -> Result<pdfcore::inspect::DocumentInspection, PdfError> {
+    run_blocking(move || pdfcore::inspect::inspect_document(Path::new(&path), password.as_deref())).await
+}
+
+// ---------------------------------------------------------------------------
 // Settings / recent files (paths + timestamps only, never content)
 // ---------------------------------------------------------------------------
 
