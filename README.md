@@ -235,12 +235,12 @@ npm test
 npx tsc --noEmit
 ```
 
-240 Rust tests and 325 frontend tests pass.
+241 Rust tests and 325 frontend tests pass.
 
 - `pdfcore`: 60 unit tests plus integration suites for merge, split, page
   tools, compression, OCR, security, metadata, watermark, annotation,
   redaction, comparison and inspection
-- `officecore`: 70 unit tests (model, ZIP limits, XML, DOCX/ODT/ODS/ODP/RTF/XLSX/CSV/PPTX,
+- `officecore`: 71 unit tests (model, ZIP limits, XML, DOCX/ODT/ODS/ODP/RTF/XLSX/CSV/PPTX,
   PDF layout, cleaner) + 8 round-trip tests against the sample documents and a
   5-test XLSX round-trip suite (100-row golden workbook, cross-sheet formulas,
   styles/merges/layout structure, validation + conditional formatting + charts,

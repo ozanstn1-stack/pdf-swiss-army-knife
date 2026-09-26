@@ -95,7 +95,7 @@ problems. Detailed release notes: [docs/release-notes-v2.2.0.md](docs/release-no
 
 ### Tests
 
-- Rust: 240 tests across the workspace (was 223); new XLSX structure tests for
+- Rust: 241 tests across the workspace (was 223); new XLSX structure tests for
   charts and conditional formatting, plus the 5-test round-trip suite.
 - Frontend: 325 tests (was 303), including 12 new editor component tests that
   type Enter/Backspace/Shift+Enter and assert caret and model behaviour.

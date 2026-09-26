@@ -97,7 +97,7 @@ release notes said they did. Every fix below has a regression test.
 
 ## Tests
 
-- Rust workspace: 240 tests (was 223), all green, including the new XLSX
+- Rust workspace: 241 tests (was 223), all green, including the new XLSX
   chart/conditional-format structure tests and the 5-test round-trip suite.
 - Frontend: 325 tests (was 303), including 12 new editor component tests.
 - Type check: `npx tsc --noEmit` clean.
