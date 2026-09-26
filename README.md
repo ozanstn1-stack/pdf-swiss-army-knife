@@ -9,7 +9,7 @@ Everything runs on your machine. Documents are never uploaded, there is no
 telemetry, and the app stays useful without an internet connection. Macros and
 embedded scripts in office files are never executed.
 
-**Version 2.0.0** · Platform: Windows (Tauri also targets Linux/macOS, but only
+**Version 2.1.0** · Platform: Windows (Tauri also targets Linux/macOS, but only
 Windows is built and verified here) · UI languages: English, Turkish.
 
 ## Screenshots
@@ -40,6 +40,17 @@ These workflows were exercised on the built application and with automated tests
 - **Impress**: opening the sample PPTX loads five slides with text, bullets,
   images, shapes, a table, speaker notes and transitions (screenshot above).
 - **PDF**: every tool from v1.x is unchanged and still covered by its tests.
+- **Redaction**: text under a redaction box is *deleted from the content
+  stream*, not covered with a black rectangle. Integration tests extract the
+  text back out of the redacted file and assert the string is gone, which is
+  the only way to prove it cannot be recovered.
+- **Compare**: a document compared against a revision reports which pages were
+  added, removed or changed; with the picture pass on, changed pixels are
+  marked on a side-by-side render.
+- **Inspect**: reports page geometry, fonts (and whether they are embedded),
+  images, form fields, outline, encryption and metadata, then lists findings
+  with a severity and an explanation. Accessibility conformance is derived from
+  those findings rather than asserted.
 
 ## Modules
 
@@ -89,10 +100,29 @@ These workflows were exercised on the built application and with automated tests
   **Document Cleaner** (metadata/comments removal, embedded image optimisation) ·
   **PDF Forms** (standard AcroForm text, checkbox, radio and dropdown fields)
 
-### PDF module (unchanged from v1.x)
+### PDF module
 Reader with search, Merge, Split, Organize, Compress, OCR (Tesseract), Protect (AES-256),
 Unlock, Watermark, Annotate, Metadata, Page tools (extract/delete/rotate/resize/crop/numbering),
 PDF → JPG/PNG, JPG/PNG → PDF, Batch processing, Info, optional offline AI assistant.
+
+Added since v2.0.0:
+
+- **Redact** — remove text and pixels permanently. Drag over the page, or let
+  the detector find e-mail addresses, card numbers, IBANs, passport numbers
+  and phone numbers, then deselect anything to keep. Image areas can be
+  painted out or have their pixels removed (better for scans). Author and
+  document metadata can be stripped in the same pass.
+  Detection: e-mail (RFC-shaped), card numbers (Luhn-checked), IBANs (mod-97),
+  phone numbers, passport/ID numbers (check digits where the country uses
+  them).
+- **Compare** — two documents, page by page. A text pass classifies each page
+  as added, removed or changed; an optional pixel pass catches changes that
+  leave the text alone (stamps, signatures, scans). Both documents stay local
+  and are never modified.
+- **Inspect** — a read-only report of what a PDF really contains, including
+  what is wrong with it: unembedded fonts, missing language, untagged
+  structure, unlabelled form fields, JavaScript, image colour spaces and
+  total image pixels, with a finding and a severity for each.
 
 ### Workspace
 - Document tabs for Writer/Calc/Impress, dirty indicators
@@ -178,14 +208,25 @@ Development: `npm run app:dev`.
 
 ```bash
 cargo test --workspace
+npm test
+npx tsc --noEmit
 ```
 
+223 Rust tests and 288 frontend tests pass.
+
+- `pdfcore`: 60 unit tests plus integration suites for merge, split, page
+  tools, compression, OCR, security, metadata, watermark, annotation,
+  redaction, comparison and inspection
 - `officecore`: 62 unit tests (model, ZIP limits, XML, DOCX/ODT/ODS/ODP/RTF/XLSX/CSV/PPTX,
   PDF layout, cleaner) + 8 round-trip tests against the sample documents
-- `pdfcore`: 62 unit tests + 50 integration tests (unchanged)
-- `aicore`: 18 tests · `src-tauri`: 10 tests
-- The frontend is type-checked with strict TypeScript (`npm run build`); a browser
-  test suite for the Chrome extension lives in `chrome-extension/`.
+- `aicore`: 18 tests, `src-tauri`: 10 tests
+- Frontend: 288 tests covering the formula engine, writer runs and caret
+  logic, cell maths, i18n parity and redaction geometry, with a strict
+  TypeScript type check on top
+
+The redaction tests are the ones worth knowing about: they run the redaction,
+re-extract the text from the result and assert the target string is no longer
+present. A black rectangle would pass a visual check and fail this one.
 
 ## Privacy and security
 
