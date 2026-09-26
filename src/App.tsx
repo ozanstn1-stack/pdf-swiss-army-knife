@@ -33,6 +33,8 @@ import {
   Menu,
   Minimize2,
   Moon,
+  Eraser,
+  FileDiff,
   Puzzle,
   Scissors,
   Settings as SettingsIcon,
@@ -60,6 +62,9 @@ import { Security } from "./screens/Security";
 import { Watermark } from "./screens/Watermark";
 import { PageTools } from "./screens/PageTools";
 import { Annotate } from "./screens/Annotate";
+import { Redact } from "./screens/Redact";
+import { Compare } from "./screens/Compare";
+import { Inspect } from "./screens/Inspect";
 import { Metadata } from "./screens/Metadata";
 import { Batch } from "./screens/Batch";
 import { History } from "./screens/History";
@@ -290,6 +295,9 @@ export default function App() {
       unlock: <Security tab={securityTab} initialFiles={files} dragging={dragging} />,
       watermark: <Watermark initialFiles={files} dragging={dragging} />,
       annotate: <Annotate initialFiles={files} dragging={dragging} />,
+      redact: <Redact initialFiles={files} dragging={dragging} />,
+      compare: <Compare initialFiles={files} dragging={dragging} />,
+      inspect: <Inspect initialFiles={files} dragging={dragging} />,
       metadata: <Metadata initialFiles={files} dragging={dragging} />,
       pageTools: <PageTools tab={pageToolTab} initialFiles={files} dragging={dragging} />,
       batch: <Batch initialFiles={files} dragging={dragging} />,
@@ -357,6 +365,9 @@ export default function App() {
         { id: "pageTools", label: t("nav.pageTools"), icon: <Wand2 size={16} /> },
         { id: "watermark", label: t("nav.watermark"), icon: <Stamp size={16} /> },
         { id: "annotate", label: t("nav.annotate"), icon: <Type size={16} /> },
+        { id: "redact", label: t("nav.redact"), icon: <Eraser size={16} /> },
+        { id: "compare", label: t("nav.compare"), icon: <FileDiff size={16} /> },
+        { id: "inspect", label: t("nav.inspect"), icon: <FileSearch size={16} /> },
         { id: "metadata", label: t("nav.metadata"), icon: <Puzzle size={16} /> },
       ],
     },

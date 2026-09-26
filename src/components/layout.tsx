@@ -36,10 +36,26 @@ export function TwoColumn({ main, side }: { main: ReactNode; side: ReactNode }) 
   );
 }
 
-export function OptionCard({ title, children, className = "" }: { title?: ReactNode; children: ReactNode; className?: string }) {
+export function OptionCard({
+  title,
+  action,
+  children,
+  className = "",
+}: {
+  title?: ReactNode;
+  /** Rendered next to the title, e.g. a "rescan" button. */
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
     <div className={`card p-4 flex flex-col gap-3.5 ${className}`}>
-      {title ? <h3 className="text-[13px] font-bold uppercase tracking-wider muted">{title}</h3> : null}
+      {title || action ? (
+        <div className="flex items-center justify-between gap-2">
+          {title ? <h3 className="text-[13px] font-bold uppercase tracking-wider muted">{title}</h3> : null}
+          {action}
+        </div>
+      ) : null}
       {children}
     </div>
   );

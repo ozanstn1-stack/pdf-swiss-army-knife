@@ -17,8 +17,11 @@ import type {
   Annotation,
   AppInfo,
   CompressEstimate,
+  CompareOptions,
+  CompareReport,
   CompressOptions,
   CropItem,
+  DocumentInspection,
   EngineStatus,
   ImageItem,
   ImageToPdfOptions,
@@ -34,6 +37,9 @@ import type {
   SearchResponse,
   ProtectOptions,
   RecentEntry,
+  RedactionArea,
+  RedactionMatch,
+  RedactionOptions,
   Settings,
   SplitMode,
   Thumbnail,
@@ -364,6 +370,40 @@ export const annotatePdf = (
   jobId: string,
   password?: string,
 ) => invoke<OpResult>("annotate_pdf", { request: { input, output, annotations, password, jobId } });
+
+export const redactPdf = (
+  input: string,
+  output: OutputSpec,
+  areas: RedactionArea[],
+  options: RedactionOptions,
+  jobId: string,
+  password?: string,
+) => invoke<OpResult>("redact_pdf", { request: { input, output, areas, options, password, jobId } });
+
+export const detectSensitiveText = (path: string, page: number, password?: string) =>
+  invoke<RedactionMatch[]>("detect_sensitive_text", { path, page, password: password || null });
+
+export const comparePdfs = (
+  left: string,
+  right: string,
+  options: CompareOptions,
+  jobId: string,
+  leftPassword?: string,
+  rightPassword?: string,
+) =>
+  invoke<CompareReport>("compare_pdfs", {
+    request: {
+      left,
+      right,
+      leftPassword,
+      rightPassword,
+      options,
+      jobId,
+    },
+  });
+
+export const inspectDocument = (path: string, password?: string) =>
+  invoke<DocumentInspection>("inspect_document", { path, password: password || null });
 
 // ---------------------------------------------------------------------------
 // Settings / recent

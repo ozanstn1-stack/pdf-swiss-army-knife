@@ -474,3 +474,175 @@ export interface SelectedFile {
   sizeBytes: number;
   pages?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Redaction, comparison, inspection
+// ---------------------------------------------------------------------------
+
+/** How an image area under a redaction box is treated. */
+export type ImageRedactionMode = "obscure" | "removePixels";
+
+export interface RedactionArea {
+  page: number;
+  left: number;
+  bottom: number;
+  right: number;
+  top: number;
+}
+
+export interface RedactionOptions {
+  /** Fill colour as `#rrggbb`; the text is removed, not just covered. */
+  fill: string;
+  images: ImageRedactionMode;
+  /** Slack added around matched text, in points, so glyph edges are covered. */
+  padding_pt: number;
+  remove_metadata: boolean;
+}
+
+export interface RedactionMatch {
+  page: number;
+  text: string;
+  left: number;
+  bottom: number;
+  right: number;
+  top: number;
+  /** "email" | "iban" | "card" | "phone" | "passport". */
+  kind: string;
+}
+
+export interface CompareOptions {
+  max_pages: number;
+  /** Per-channel difference (0-255) below which pixels count as equal. */
+  tolerance: number;
+  dpi: number;
+  visual: boolean;
+  ignore_whitespace: boolean;
+  max_differences: number;
+}
+
+export interface TextDifference {
+  page: number;
+  kind: "added" | "removed" | "changed";
+  left: string;
+  right: string;
+}
+
+export interface VisualDifference {
+  page: number;
+  /** Fraction of differing pixels, 0-1. */
+  difference: number;
+  changed_pixels: number;
+  total_pixels: number;
+  /** JPEG data URL of a side-by-side render with differences highlighted. */
+  preview: string;
+}
+
+export interface CompareReport {
+  left_pages: number;
+  right_pages: number;
+  removed_pages: number[];
+  added_pages: number[];
+  text_differences: TextDifference[];
+  visual_truncated: boolean;
+  visual_differences: VisualDifference[];
+  identical: boolean;
+  warnings: string[];
+}
+
+export type Severity = "error" | "warning" | "info";
+
+export interface InspectionFinding {
+  code: string;
+  severity: Severity;
+  detail: string;
+}
+
+export interface FontInfo {
+  name: string;
+  subtype: string;
+  embedded: boolean;
+  occurrences: number;
+}
+
+export interface ImageInfo {
+  width: number;
+  height: number;
+  color_space: string;
+  bits_per_component: number;
+  filter: string;
+  occurrences: number;
+}
+
+export interface ColorSpaceInfo {
+  name: string;
+  occurrences: number;
+}
+
+export interface AnnotationInfo {
+  page: number;
+  subtype: string;
+  contents: string;
+  hidden: boolean;
+}
+
+export interface LinkInfo {
+  page: number;
+  rect: [number, number, number, number];
+  uri: string;
+}
+
+export interface FormFieldInfo {
+  name: string;
+  missing_label: boolean;
+  kind: string;
+  field_type: string;
+  read_only: boolean;
+  required: boolean;
+  options: string[];
+}
+
+export interface OutlineEntry {
+  title: string;
+  page: number;
+  depth: number;
+}
+
+export interface PageGeometry {
+  page: number;
+  width: number;
+  height: number;
+  rotation: number;
+  has_text: boolean;
+}
+
+export interface DocumentInspection {
+  path: string;
+  file_size_bytes: number;
+  pdf_version: string;
+  encrypted: boolean;
+  linearized: boolean;
+  page_count: number;
+  title_override: string;
+  author_override: string;
+  subject_override: string;
+  creator_override: string;
+  producer_override: string;
+  creation_date: string;
+  mod_date: string;
+  language: string;
+  struct_tree: boolean;
+  tagged: boolean;
+  total_image_pixels: number;
+  /** "passes" | "fails" - derived from the findings, never guessed. */
+  accessibility_conformance: string;
+  pages: PageGeometry[];
+  fonts: FontInfo[];
+  images: ImageInfo[];
+  color_spaces: ColorSpaceInfo[];
+  annotations: AnnotationInfo[];
+  links: LinkInfo[];
+  form_fields: FormFieldInfo[];
+  outline: OutlineEntry[];
+  has_javascript: boolean;
+  findings: InspectionFinding[];
+}
