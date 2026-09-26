@@ -14,6 +14,29 @@ export interface PageSize {
   height: number;
 }
 
+/**
+ * The page geometry as the backend sends it.
+ *
+ * `render::PageGeometry` derives Serialize without `rename_all`, so its fields
+ * arrive as `width_pt` / `height_pt` rather than camelCase. Going through this
+ * one function keeps that quirk in a single place instead of spreading it
+ * across components, where a wrong property silently reads as `undefined`.
+ */
+export interface WirePageGeometry {
+  page: number;
+  width_pt?: number;
+  height_pt?: number;
+  width?: number;
+  height?: number;
+}
+
+/** Normalizes either spelling of a page geometry into a usable page size. */
+export function normalizePageSize(geometry: WirePageGeometry): PageSize {
+  const width = geometry.width_pt ?? geometry.width ?? 0;
+  const height = geometry.height_pt ?? geometry.height ?? 0;
+  return { width, height };
+}
+
 export interface NormalizedRect {
   x: number;
   y: number;

@@ -7,7 +7,7 @@ import { OptionCard, Screen, TwoColumn } from "../components/layout";
 import { useT } from "../lib/i18n";
 import { useTool } from "../lib/useTool";
 import { detectSensitiveText, redactPdf, toAppError } from "../lib/api";
-import { rectToUserSpace, userSpaceToRect } from "../lib/redact-geometry";
+import { normalizePageSize, rectToUserSpace, userSpaceToRect } from "../lib/redact-geometry";
 import type { ImageRedactionMode, RedactionArea, RedactionMatch, RedactionOptions } from "../lib/types";
 
 /** A box the user drew, in page space, with a stable id for removal. */
@@ -30,8 +30,8 @@ export function Redact({ initialFiles, dragging }: { initialFiles?: string[]; dr
   const [options, setOptions] = useState<RedactionOptions>({
     fill: "#000000",
     images: "obscure",
-    padding_pt: 1,
-    remove_metadata: true,
+    paddingPt: 1,
+    removeMetadata: true,
   });
   const [page, setPage] = useState(1);
   const [boxes, setBoxes] = useState<DrawnBox[]>([]);
@@ -43,10 +43,12 @@ export function Redact({ initialFiles, dragging }: { initialFiles?: string[]; dr
 
   const patch = (values: Partial<RedactionOptions>) => setOptions((previous) => ({ ...previous, ...values }));
   const pageCount = session.info?.pageCount ?? 0;
-  const geometry = useMemo(
-    () => session.info?.pageGeometries.find((entry) => entry.page === page) ?? null,
-    [session.info, page],
-  );
+  // render::PageGeometry is serialized without rename_all, so the widths are
+  // width_pt/height_pt. normalizePageSize is the single place that knows it.
+  const geometry = useMemo(() => {
+    const found = session.info?.pageGeometries.find((entry) => entry.page === page);
+    return found ? normalizePageSize(found) : null;
+  }, [session.info, page]);
 
   // Boxes belong to the page they were drawn on; a new document starts clean.
   useEffect(() => {
@@ -331,9 +333,9 @@ export function Redact({ initialFiles, dragging }: { initialFiles?: string[]; dr
               </Field>
               <p className="text-xs muted">{options.images === "obscure" ? t("redact.imageObscureHint") : t("redact.imageRemoveHint")}</p>
               <Field label={t("redact.padding")}>
-                <Slider value={options.padding_pt} min={0} max={6} step={0.5} onChange={(value) => patch({ padding_pt: value })} />
+                <Slider value={options.paddingPt} min={0} max={6} step={0.5} onChange={(value) => patch({ paddingPt: value })} />
               </Field>
-              <Toggle checked={options.remove_metadata} onChange={(value) => patch({ remove_metadata: value })} label={t("redact.stripMetadata")} />
+              <Toggle checked={options.removeMetadata} onChange={(value) => patch({ removeMetadata: value })} label={t("redact.stripMetadata")} />
               {boxes.length ? (
                 <div className="flex items-center justify-between text-xs">
                   <span className="muted">

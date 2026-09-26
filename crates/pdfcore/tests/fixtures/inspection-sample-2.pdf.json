@@ -1,0 +1,61 @@
+{
+  "path": "D:\\AI\\projects\\pdf-swiss-army-knife\\crates\\pdfcore\\../../samples\\sample-2.pdf",
+  "fileSizeBytes": 2079,
+  "pdfVersion": "1.7",
+  "pageCount": 3,
+  "encrypted": false,
+  "linearized": false,
+  "objectCount": 19,
+  "hasStructTree": false,
+  "marked": false,
+  "structTree": false,
+  "language": "",
+  "viewerPreferences": "",
+  "fonts": [
+    {
+      "name": "F1",
+      "subtype": "Type1",
+      "composite": false,
+      "embedded": false,
+      "embeddedFormats": []
+    }
+  ],
+  "images": [],
+  "colorSpaces": [],
+  "annotations": [],
+  "formFields": [],
+  "outline": [],
+  "embeddedFiles": [],
+  "hasJavascript": false,
+  "javascriptEntries": [],
+  "hasOpenAction": false,
+  "hasAcroForm": false,
+  "attachmentCount": 0,
+  "totalImagePixels": 0,
+  "findings": [
+    {
+      "severity": "error",
+      "code": "a11y.missing-language",
+      "title": "No document language",
+      "detail": "Set the document language so a screen reader picks the right voice."
+    },
+    {
+      "severity": "error",
+      "code": "a11y.untagged",
+      "title": "Not a tagged PDF",
+      "detail": "The document has no structure tree, so a screen reader cannot tell headings from body text. Export it tagged."
+    },
+    {
+      "severity": "error",
+      "code": "pdfa.unembedded-font",
+      "title": "Some fonts are not embedded",
+      "detail": "1 font(s) rely on the reader's substitutes, so the document renders differently elsewhere and fails PDF/A."
+    }
+  ],
+  "accessibilityConformance": "fails",
+  "titleOverride": "Sample Report B",
+  "subjectOverride": "Synthetic test document",
+  "authorOverride": "PDF Swiss Army Knife samples",
+  "producer": "",
+  "creator": ""
+}

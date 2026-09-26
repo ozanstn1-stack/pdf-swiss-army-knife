@@ -477,11 +477,18 @@ export interface SelectedFile {
 
 // ---------------------------------------------------------------------------
 // Redaction, comparison, inspection
+//
+// These mirror the Rust structs one field at a time. Every one of those derives
+// Serialize with `#[serde(rename_all = "camelCase")]`, so the wire format is
+// camelCase; inventing a field here reads as `undefined` at runtime and, in one
+// case, blanked the whole window. `crates/pdfcore/tests/dump_inspection.rs`
+// prints the real payload for a real file to check this against.
 // ---------------------------------------------------------------------------
 
 /** How an image area under a redaction box is treated. */
 export type ImageRedactionMode = "obscure" | "removePixels";
 
+/** A rectangle in PDF page space: origin bottom-left, units of points. */
 export interface RedactionArea {
   page: number;
   left: number;
@@ -494,9 +501,9 @@ export interface RedactionOptions {
   /** Fill colour as `#rrggbb`; the text is removed, not just covered. */
   fill: string;
   images: ImageRedactionMode;
-  /** Slack added around matched text, in points, so glyph edges are covered. */
-  padding_pt: number;
-  remove_metadata: boolean;
+  /** Slack added around matched text so glyph edges are covered too. */
+  paddingPt: number;
+  removeMetadata: boolean;
 }
 
 export interface RedactionMatch {
@@ -511,13 +518,13 @@ export interface RedactionMatch {
 }
 
 export interface CompareOptions {
-  max_pages: number;
+  maxPages: number;
   /** Per-channel difference (0-255) below which pixels count as equal. */
   tolerance: number;
   dpi: number;
   visual: boolean;
-  ignore_whitespace: boolean;
-  max_differences: number;
+  ignoreWhitespace: boolean;
+  maxDifferences: number;
 }
 
 export interface TextDifference {
@@ -531,118 +538,126 @@ export interface VisualDifference {
   page: number;
   /** Fraction of differing pixels, 0-1. */
   difference: number;
-  changed_pixels: number;
-  total_pixels: number;
+  changedPixels: number;
+  totalPixels: number;
   /** JPEG data URL of a side-by-side render with differences highlighted. */
   preview: string;
 }
 
 export interface CompareReport {
-  left_pages: number;
-  right_pages: number;
-  removed_pages: number[];
-  added_pages: number[];
-  text_differences: TextDifference[];
-  visual_truncated: boolean;
-  visual_differences: VisualDifference[];
+  leftPages: number;
+  rightPages: number;
+  removedPages: number[];
+  addedPages: number[];
+  textDifferences: TextDifference[];
+  visualTruncated: boolean;
+  visualDifferences: VisualDifference[];
   identical: boolean;
   warnings: string[];
 }
 
-export type Severity = "error" | "warning" | "info";
+export type Severity = "info" | "warning" | "error";
 
 export interface InspectionFinding {
-  code: string;
   severity: Severity;
+  /** Stable identifier, e.g. `a11y.missing-title`. */
+  code: string;
+  /** Short title for the list. */
+  title: string;
+  /** What to do about it. */
   detail: string;
 }
 
 export interface FontInfo {
   name: string;
   subtype: string;
+  /** True for a Type 0 composite font. */
+  composite: boolean;
+  /** True when the font program itself is in the file. */
   embedded: boolean;
-  occurrences: number;
+  embeddedFormats: string[];
 }
 
 export interface ImageInfo {
   width: number;
   height: number;
-  color_space: string;
-  bits_per_component: number;
+  colorSpace: string;
+  bitsPerComponent: number;
+  /** "DCTDecode", "FlateDecode", "JPXDecode"... */
   filter: string;
   occurrences: number;
 }
 
 export interface ColorSpaceInfo {
   name: string;
+  components: number;
   occurrences: number;
+  deviceDependent: boolean;
 }
 
 export interface AnnotationInfo {
   page: number;
   subtype: string;
+  /** The annotation's /Contents text, which often holds a note. */
   contents: string;
+  /** True when the annotation is not displayed on the page. */
   hidden: boolean;
-}
-
-export interface LinkInfo {
-  page: number;
-  rect: [number, number, number, number];
-  uri: string;
 }
 
 export interface FormFieldInfo {
   name: string;
-  missing_label: boolean;
+  /** "Tx" (text), "Btn" (button), "Ch" (choice)... */
   kind: string;
-  field_type: string;
-  read_only: boolean;
+  fieldType: string;
+  readOnly: boolean;
   required: boolean;
+  /** True when the field has no /TU tooltip or alternate name. */
+  missingLabel: boolean;
   options: string[];
 }
 
 export interface OutlineEntry {
   title: string;
+  /** Page the entry points at, 1-based; 0 when the destination is unresolved. */
   page: number;
   depth: number;
 }
 
-export interface PageGeometry {
-  page: number;
-  width: number;
-  height: number;
-  rotation: number;
-  has_text: boolean;
-}
-
 export interface DocumentInspection {
   path: string;
-  file_size_bytes: number;
-  pdf_version: string;
+  fileSizeBytes: number;
+  pdfVersion: string;
+  pageCount: number;
   encrypted: boolean;
   linearized: boolean;
-  page_count: number;
-  title_override: string;
-  author_override: string;
-  subject_override: string;
-  creator_override: string;
-  producer_override: string;
-  creation_date: string;
-  mod_date: string;
+  objectCount: number;
+  /** /StructTreeRoot is present. */
+  hasStructTree: boolean;
+  /** /MarkInfo is present. */
+  marked: boolean;
+  /** The structure tree itself parsed. */
+  structTree: boolean;
   language: string;
-  struct_tree: boolean;
-  tagged: boolean;
-  total_image_pixels: number;
-  /** "passes" | "fails" - derived from the findings, never guessed. */
-  accessibility_conformance: string;
-  pages: PageGeometry[];
+  viewerPreferences: string;
   fonts: FontInfo[];
   images: ImageInfo[];
-  color_spaces: ColorSpaceInfo[];
+  colorSpaces: ColorSpaceInfo[];
   annotations: AnnotationInfo[];
-  links: LinkInfo[];
-  form_fields: FormFieldInfo[];
+  formFields: FormFieldInfo[];
   outline: OutlineEntry[];
-  has_javascript: boolean;
+  embeddedFiles: string[];
+  hasJavascript: boolean;
+  javascriptEntries: string[];
+  hasOpenAction: boolean;
+  hasAcroForm: boolean;
+  attachmentCount: number;
+  totalImagePixels: number;
   findings: InspectionFinding[];
+  /** "pdf/ua" when the blocking checks pass, otherwise the first failure. */
+  accessibilityConformance: string;
+  titleOverride: string;
+  subjectOverride: string;
+  authorOverride: string;
+  producer: string;
+  creator: string;
 }

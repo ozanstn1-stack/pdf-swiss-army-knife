@@ -9,12 +9,12 @@ import { comparePdfs, toAppError } from "../lib/api";
 import type { CompareOptions, CompareReport, TextDifference } from "../lib/types";
 
 const DEFAULTS: CompareOptions = {
-  max_pages: 2000,
+  maxPages: 2000,
   tolerance: 12,
   dpi: 96,
   visual: false,
-  ignore_whitespace: false,
-  max_differences: 200,
+  ignoreWhitespace: false,
+  maxDifferences: 200,
 };
 
 function statusTone(kind: TextDifference["kind"]): "ok" | "warn" | "danger" {
@@ -77,9 +77,9 @@ export function Compare({ initialFiles, dragging }: { initialFiles?: string[]; d
 
   const summary = useMemo(() => {
     if (!report) return null;
-    const changed = report.text_differences.filter((entry) => entry.kind === "changed").length;
-    const added = report.text_differences.filter((entry) => entry.kind === "added").length;
-    const removed = report.text_differences.filter((entry) => entry.kind === "removed").length;
+    const changed = report.textDifferences.filter((entry) => entry.kind === "changed").length;
+    const added = report.textDifferences.filter((entry) => entry.kind === "added").length;
+    const removed = report.textDifferences.filter((entry) => entry.kind === "removed").length;
     return { changed, added, removed };
   }, [report]);
 
@@ -117,7 +117,7 @@ export function Compare({ initialFiles, dragging }: { initialFiles?: string[]; d
                     <Badge tone="warn">{t("compare.different")}</Badge>
                   )}
                   <span className="text-xs muted">
-                    {report.left_pages} / {report.right_pages} {t("compare.pages")}
+                    {report.leftPages} / {report.rightPages} {t("compare.pages")}
                   </span>
                   {summary ? (
                     <span className="text-xs muted">
@@ -144,9 +144,9 @@ export function Compare({ initialFiles, dragging }: { initialFiles?: string[]; d
                 />
 
                 {view === "text" ? (
-                  report.text_differences.length ? (
+                  report.textDifferences.length ? (
                     <div className="flex flex-col gap-2 max-h-[520px] overflow-auto">
-                      {report.text_differences.map((entry) => (
+                      {report.textDifferences.map((entry) => (
                         <div key={`${entry.page}-${entry.kind}`} className="border-t pt-2 first:border-0 first:pt-0">
                           <div className="flex items-center gap-2 mb-1">
                             <Badge tone={statusTone(entry.kind)}>{t(`compare.kind.${entry.kind}`)}</Badge>
@@ -179,10 +179,10 @@ export function Compare({ initialFiles, dragging }: { initialFiles?: string[]; d
                   ) : (
                     <p className="text-xs muted">{report.identical ? t("compare.noTextDiff") : t("compare.noTextDiffShort")}</p>
                   )
-                ) : report.visual_differences.length ? (
+                ) : report.visualDifferences.length ? (
                   <>
                     <div className="flex flex-col gap-3 max-h-[560px] overflow-auto">
-                      {report.visual_differences.map((entry) => (
+                      {report.visualDifferences.map((entry) => (
                         <div key={entry.page} className="flex flex-col gap-1">
                           <span className="text-xs muted">
                             {t("common.page")} {entry.page} · {(entry.difference * 100).toFixed(2)}% {t("compare.pixels")}
@@ -196,7 +196,7 @@ export function Compare({ initialFiles, dragging }: { initialFiles?: string[]; d
                         </div>
                       ))}
                     </div>
-                    {report.visual_truncated ? <p className="text-xs muted">{t("compare.visualTruncated")}</p> : null}
+                    {report.visualTruncated ? <p className="text-xs muted">{t("compare.visualTruncated")}</p> : null}
                   </>
                 ) : (
                   <p className="text-xs muted">{t("compare.noVisualDiff")}</p>
@@ -243,27 +243,27 @@ export function Compare({ initialFiles, dragging }: { initialFiles?: string[]; d
                 </>
               ) : null}
               <Toggle
-                checked={options.ignore_whitespace}
-                onChange={(value) => patch({ ignore_whitespace: value })}
+                checked={options.ignoreWhitespace}
+                onChange={(value) => patch({ ignoreWhitespace: value })}
                 label={t("compare.ignoreWhitespace")}
               />
               <Field label={t("compare.maxPages")}>
                 <Slider
-                  value={options.max_pages}
+                  value={options.maxPages}
                   min={10}
                   max={5000}
                   step={10}
-                  onChange={(value) => patch({ max_pages: value })}
+                  onChange={(value) => patch({ maxPages: value })}
                   format={(value) => String(value)}
                 />
               </Field>
               <Field label={t("compare.maxDifferences")}>
                 <Slider
-                  value={options.max_differences}
+                  value={options.maxDifferences}
                   min={10}
                   max={1000}
                   step={10}
-                  onChange={(value) => patch({ max_differences: value })}
+                  onChange={(value) => patch({ maxDifferences: value })}
                   format={(value) => String(value)}
                 />
               </Field>

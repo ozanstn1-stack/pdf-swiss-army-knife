@@ -1,0 +1,63 @@
+{
+  "path": "D:\\AI\\projects\\pdf-swiss-army-knife\\crates\\pdfcore\\../../samples\\sample-images.pdf",
+  "fileSizeBytes": 71208,
+  "pdfVersion": "1.7",
+  "pageCount": 2,
+  "encrypted": false,
+  "linearized": false,
+  "objectCount": 14,
+  "hasStructTree": false,
+  "marked": false,
+  "structTree": false,
+  "language": "",
+  "viewerPreferences": "",
+  "fonts": [],
+  "images": [
+    {
+      "width": 1000,
+      "height": 1400,
+      "colorSpace": "DeviceRGB",
+      "bitsPerComponent": 8,
+      "filter": "FlateDecode",
+      "occurrences": 2
+    }
+  ],
+  "colorSpaces": [
+    {
+      "name": "DeviceRGB",
+      "components": 3,
+      "occurrences": 2,
+      "deviceDependent": true
+    }
+  ],
+  "annotations": [],
+  "formFields": [],
+  "outline": [],
+  "embeddedFiles": [],
+  "hasJavascript": false,
+  "javascriptEntries": [],
+  "hasOpenAction": false,
+  "hasAcroForm": false,
+  "attachmentCount": 0,
+  "totalImagePixels": 2800000,
+  "findings": [
+    {
+      "severity": "error",
+      "code": "a11y.missing-language",
+      "title": "No document language",
+      "detail": "Set the document language so a screen reader picks the right voice."
+    },
+    {
+      "severity": "error",
+      "code": "a11y.untagged",
+      "title": "Not a tagged PDF",
+      "detail": "The document has no structure tree, so a screen reader cannot tell headings from body text. Export it tagged."
+    }
+  ],
+  "accessibilityConformance": "fails",
+  "titleOverride": "Image-heavy sample",
+  "subjectOverride": "Synthetic test document",
+  "authorOverride": "PDF Swiss Army Knife samples",
+  "producer": "",
+  "creator": ""
+}

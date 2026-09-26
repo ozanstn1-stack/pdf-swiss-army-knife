@@ -46,6 +46,9 @@ function Finding({ finding }: { finding: InspectionFinding }) {
       <div className="min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge tone={severityTone(finding.severity)}>{t(`inspect.severity.${finding.severity}`)}</Badge>
+          <span className="text-xs" style={{ color: "var(--text-1)" }}>
+            {finding.title}
+          </span>
           <span className="text-xs muted">{finding.code}</span>
         </div>
         <p className="text-xs mt-0.5" style={{ color: "var(--text-1)" }}>
@@ -131,7 +134,7 @@ export function Inspect({ initialFiles, dragging }: { initialFiles?: string[]; d
             ) : report ? (
               <Card className="p-4 flex flex-col gap-3">
                 <div className="flex items-center gap-2 flex-wrap">
-                  {report.accessibility_conformance === "passes" ? (
+                  {report.accessibilityConformance === "passes" ? (
                     <Badge tone="ok">
                       <span className="flex items-center gap-1">
                         <ShieldCheck size={12} /> {t("inspect.a11yPasses")}
@@ -165,30 +168,52 @@ export function Inspect({ initialFiles, dragging }: { initialFiles?: string[]; d
                 {tab === "overview" ? (
                   <div>
                     <Row label={t("inspect.file")} value={report.path.split(/[\\/]/).pop() ?? report.path} />
-                    <Row label={t("inspect.size")} value={formatBytes(report.file_size_bytes)} />
-                    <Row
-                      label={t("inspect.pages")}
-                      value={
-                        <>
-                          {report.page_count}
-                          {report.page_count !== report.pages.length ? ` (${report.pages.length})` : ""}
-                        </>
-                      }
-                    />
-                    <Row label={t("inspect.version")} value={report.pdf_version} />
+                    <Row label={t("inspect.size")} value={formatBytes(report.fileSizeBytes)} />
+                    <Row label={t("inspect.pages")} value={report.pageCount} />
+                    <Row label={t("inspect.objects")} value={report.objectCount} />
+                    <Row label={t("inspect.version")} value={report.pdfVersion} />
                     <Row
                       label={t("inspect.encryption")}
                       value={report.encrypted ? t("inspect.yes") : t("inspect.no")}
                     />
                     <Row label={t("inspect.linearized")} value={report.linearized ? t("inspect.yes") : t("inspect.no")} />
-                    <Row label={t("inspect.javascript")} value={report.has_javascript ? t("inspect.yes") : t("inspect.no")} />
-                    <Row label={t("inspect.structTree")} value={report.struct_tree ? t("inspect.yes") : t("inspect.no")} />
-                    <Row label={t("inspect.tagged")} value={report.tagged ? t("inspect.yes") : t("inspect.no")} />
+                    <Row
+                      label={t("inspect.javascript")}
+                      value={
+                        report.hasJavascript
+                          ? report.javascriptEntries.length
+                            ? report.javascriptEntries.join(", ")
+                            : t("inspect.yes")
+                          : t("inspect.no")
+                      }
+                    />
+                    <Row
+                      label={t("inspect.acroForm")}
+                      value={
+                        report.hasAcroForm
+                          ? `${report.formFields.length} ${t("inspect.formFields")}`
+                          : t("inspect.no")
+                      }
+                    />
+                    <Row label={t("inspect.structTree")} value={report.hasStructTree ? t("inspect.yes") : t("inspect.no")} />
+                    <Row
+                      label={t("inspect.structTreeParsed")}
+                      value={report.structTree ? t("inspect.yes") : t("inspect.no")}
+                    />
+                    <Row label={t("inspect.marked")} value={report.marked ? t("inspect.yes") : t("inspect.no")} />
                     <Row label={t("inspect.language")} value={report.language || t("inspect.none")} />
-                    <Row label={t("inspect.title")} value={report.title_override || t("inspect.none")} />
-                    <Row label={t("inspect.author")} value={report.author_override || t("inspect.none")} />
-                    <Row label={t("inspect.producer")} value={report.producer_override || t("inspect.none")} />
-                    <Row label={t("inspect.imagePixels")} value={report.total_image_pixels.toLocaleString()} />
+                    <Row label={t("inspect.title")} value={report.titleOverride || t("inspect.none")} />
+                    <Row label={t("inspect.author")} value={report.authorOverride || t("inspect.none")} />
+                    <Row label={t("inspect.producer")} value={report.producer || t("inspect.none")} />
+                    <Row label={t("inspect.creator")} value={report.creator || t("inspect.none")} />
+                    <Row label={t("inspect.subject")} value={report.subjectOverride || t("inspect.none")} />
+                    <Row label={t("inspect.openAction")} value={report.hasOpenAction ? t("inspect.yes") : t("inspect.no")} />
+                    <Row label={t("inspect.attachments")} value={report.attachmentCount} />
+                    <Row
+                      label={t("inspect.embeddedFiles")}
+                      value={report.embeddedFiles.length ? report.embeddedFiles.join(", ") : t("inspect.none")}
+                    />
+                    <Row label={t("inspect.imagePixels")} value={report.totalImagePixels.toLocaleString()} />
                   </div>
                 ) : null}
 
@@ -216,7 +241,10 @@ export function Inspect({ initialFiles, dragging }: { initialFiles?: string[]; d
                               <Badge tone={font.embedded ? "ok" : "warn"}>
                                 {font.embedded ? t("inspect.embedded") : t("inspect.notEmbedded")}
                               </Badge>
-                              {font.occurrences > 1 ? <span className="text-xs muted">×{font.occurrences}</span> : null}
+                              {font.composite ? <Badge tone="accent">Type0</Badge> : null}
+                              {font.embeddedFormats.length ? (
+                                <span className="text-xs muted">{font.embeddedFormats.join(", ")}</span>
+                              ) : null}
                             </span>
                           </div>
                         ))}
@@ -237,7 +265,7 @@ export function Inspect({ initialFiles, dragging }: { initialFiles?: string[]; d
                           style={{ borderColor: "var(--border)" }}
                         >
                           <span className="text-xs" style={{ color: "var(--text-1)" }}>
-                            {image.width} × {image.height} · {image.color_space} · {image.bits_per_component} bit · {image.filter}
+                            {image.width} × {image.height} · {image.colorSpace} · {image.bitsPerComponent} bit · {image.filter}
                           </span>
                           {image.occurrences > 1 ? <span className="text-xs muted">×{image.occurrences}</span> : null}
                         </div>
@@ -245,9 +273,10 @@ export function Inspect({ initialFiles, dragging }: { initialFiles?: string[]; d
                       <div className="pt-2">
                         <p className="text-xs muted">{t("inspect.colorSpaces")}</p>
                         <div className="flex flex-wrap gap-1.5 mt-1">
-                          {report.color_spaces.map((space) => (
-                            <Badge key={space.name}>
+                          {report.colorSpaces.map((space) => (
+                            <Badge key={space.name} tone={space.deviceDependent ? "warn" : "default"}>
                               {space.name}
+                              {space.components ? ` (${space.components})` : ""}
                               {space.occurrences > 1 ? ` ×${space.occurrences}` : ""}
                             </Badge>
                           ))}
@@ -284,9 +313,9 @@ export function Inspect({ initialFiles, dragging }: { initialFiles?: string[]; d
                     </div>
                     <div>
                       <p className="text-xs muted mb-1">{t("inspect.formFields")}</p>
-                      {report.form_fields.length ? (
+                      {report.formFields.length ? (
                         <div className="flex flex-col max-h-52 overflow-auto">
-                          {report.form_fields.map((field, index) => (
+                          {report.formFields.map((field, index) => (
                             <div
                               key={`${field.name}-${index}`}
                               className="text-xs py-1 flex items-baseline justify-between gap-2"
@@ -295,9 +324,9 @@ export function Inspect({ initialFiles, dragging }: { initialFiles?: string[]; d
                                 {field.name || `(${t("inspect.unnamed")})`}
                               </span>
                               <span className="flex items-center gap-1.5 shrink-0">
-                                <Badge>{field.field_type || "—"}</Badge>
+                                <Badge>{field.fieldType || "—"}</Badge>
                                 {field.required ? <Badge tone="accent">{t("inspect.required")}</Badge> : null}
-                                {field.missing_label ? <Badge tone="warn">{t("inspect.missingLabel")}</Badge> : null}
+                                {field.missingLabel ? <Badge tone="warn">{t("inspect.missingLabel")}</Badge> : null}
                               </span>
                             </div>
                           ))}
@@ -307,13 +336,38 @@ export function Inspect({ initialFiles, dragging }: { initialFiles?: string[]; d
                       )}
                     </div>
                     <div>
-                      <p className="text-xs muted mb-1">
-                        {t("inspect.links")} · {t("inspect.annotations")}
-                      </p>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Badge>{report.links.length} {t("inspect.links")}</Badge>
-                        <Badge>{report.annotations.length} {t("inspect.annotations")}</Badge>
-                      </div>
+                      <p className="text-xs muted mb-1">{t("inspect.annotations")}</p>
+                      {report.annotations.length ? (
+                        <div className="flex flex-col max-h-40 overflow-auto">
+                          {report.annotations.map((annotation, index) => (
+                            <div key={`${annotation.subtype}-${index}`} className="text-xs py-1 flex items-baseline justify-between gap-2">
+                              <span className="truncate" style={{ color: "var(--text-1)" }}>
+                                {annotation.contents || annotation.subtype}
+                              </span>
+                              <span className="flex items-center gap-1.5 shrink-0">
+                                <Badge>{annotation.subtype}</Badge>
+                                {annotation.hidden ? <Badge tone="warn">{t("inspect.hidden")}</Badge> : null}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs muted">{t("inspect.noAnnotations")}</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs muted mb-1">{t("inspect.embeddedFiles")}</p>
+                      {report.embeddedFiles.length ? (
+                        <div className="flex flex-col max-h-32 overflow-auto">
+                          {report.embeddedFiles.map((name) => (
+                            <span key={name} className="text-xs truncate" style={{ color: "var(--text-1)" }}>
+                              {name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs muted">{t("inspect.noEmbeddedFiles")}</p>
+                      )}
                     </div>
                   </div>
                 ) : null}
