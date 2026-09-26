@@ -44,7 +44,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { useT } from "./lib/i18n";
-import { useDev, useDrop, useJobs, useRecent, useSettings, useToasts } from "./lib/store";
+import { errorMessage, useDev, useDrop, useJobs, useRecent, useSettings, useToasts } from "./lib/store";
 import packageJson from "../package.json";
 import { devLaunchContext, startupFiles } from "./lib/api";
 import type { Navigate, ScreenId } from "./lib/nav";
@@ -587,7 +587,7 @@ function OfficeLauncher({ kind, onOpen }: OfficeLauncherProps) {
       useOfficeTabs.getState().open({ kind: result.kind, title: result.title, path: result.path, model: result.model as never, warnings: result.warnings });
       onOpen();
     } catch (error) {
-      useToasts.getState().push({ kind: "error", title: t("errors.title"), detail: error instanceof Error ? error.message : String(error) });
+      useToasts.getState().push({ kind: "error", title: t("errors.title"), detail: errorMessage(error, t) });
     }
   };
 

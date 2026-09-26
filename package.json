@@ -1,7 +1,7 @@
 {
   "name": "pdf-swiss-army-knife",
   "private": true,
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "module",
   "description": "Office Swiss Army Knife - local-first desktop office and PDF suite (Writer, Calc, Impress, PDF tools)",
   "scripts": {
@@ -20,7 +20,7 @@
     "android:engines": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-engines-android.ps1",
     "android:init": "tauri android init",
     "android:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1",
-    "android:build:all": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1 -Abi arm64-v8a,armeabi-v7a",
+    "android:build:all": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& ./scripts/build-android.ps1 -Abi arm64-v8a,armeabi-v7a\"",
     "android:dev": "tauri android dev"
   },
   "dependencies": {

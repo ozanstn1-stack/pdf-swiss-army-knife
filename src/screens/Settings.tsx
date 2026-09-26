@@ -135,6 +135,21 @@ export function Settings() {
               ))}
             </div>
           </div>
+          <div>
+            <label className="label">{t("settings.autosave")}</label>
+            <div className="seg">
+              {[0, 15, 30, 60, 300].map((seconds) => (
+                <button
+                  key={seconds}
+                  data-active={(settings.autosaveSeconds ?? 30) === seconds}
+                  onClick={() => void update({ autosaveSeconds: seconds })}
+                >
+                  {seconds === 0 ? t("settings.autosaveOff") : seconds < 60 ? `${seconds} s` : `${seconds / 60} min`}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs muted">{t("settings.autosaveHint")}</p>
+          </div>
         </Card>
 
         <Card className="p-5 flex flex-col gap-4">

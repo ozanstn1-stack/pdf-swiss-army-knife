@@ -67,6 +67,37 @@ function Resolve-Ndk {
     throw 'Android NDK not found. Install one with `sdkmanager "ndk;27.3.13750724"` or pass -NdkHome.'
 }
 
+# PowerShell 5.1 turns anything a native tool writes to stderr into an error
+# record, and with $ErrorActionPreference = 'Stop' that aborts the build before
+# $LASTEXITCODE is ever consulted. Cargo, Gradle, esbuild and npm all write
+# progress bars, ANSI colour codes and warnings to stderr on a *successful*
+# run, so the script could never get past the frontend step. Run native tools
+# with the preference relaxed and decide on the exit code, which is the only
+# thing that actually says whether the build worked.
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [string[]]$Arguments = @(),
+        [string]$What = 'command',
+        [string]$WorkingDirectory
+    )
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = 0
+    try {
+        Push-Location $(if ($WorkingDirectory) { $WorkingDirectory } else { $root })
+        try {
+            & $Command @Arguments
+            $code = $LASTEXITCODE
+        } finally {
+            Pop-Location
+        }
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($code -ne 0) { throw "$What failed with exit code $code" }
+}
+
 $sdk = Resolve-Sdk -Explicit $AndroidHome
 $ndk = Resolve-Ndk -Explicit $NdkHome -Sdk $sdk
 $env:ANDROID_HOME = $sdk
@@ -85,8 +116,10 @@ if (-not $SkipEngines) {
     }
     if ($missing) {
         Write-Host '==> Fetching Android engines'
-        & (Join-Path $PSScriptRoot 'fetch-engines-android.ps1') -Abis $Abi
-        if ($LASTEXITCODE -ne 0) { throw 'engine fetch failed' }
+        Invoke-Native -Command 'powershell' -Arguments @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            (Join-Path $PSScriptRoot 'fetch-engines-android.ps1'), '-Abis', ($Abi -join ',')
+        ) -What 'engine fetch'
     } else {
         Write-Host '==> Android engines present'
     }
@@ -95,13 +128,7 @@ if (-not $SkipEngines) {
 # ---------------------------------------------------------------- frontend
 if (-not $SkipFrontend) {
     Write-Host '==> Building frontend'
-    Push-Location $root
-    try {
-        & npm run build
-        if ($LASTEXITCODE -ne 0) { throw 'frontend build failed' }
-    } finally {
-        Pop-Location
-    }
+    Invoke-Native -Command 'npm' -Arguments @('run', 'build') -What 'frontend build'
 }
 if (-not (Test-Path (Join-Path $root 'dist\index.html'))) {
     throw 'dist/index.html is missing - run without -SkipFrontend first.'
@@ -197,13 +224,7 @@ foreach ($archAbi in $Abi) {
     if (-not $Debug) { $cargoArgs += '--release' }
 
     Write-Host "==> Cargo build $archAbi ($profile)"
-    Push-Location $root
-    try {
-        & cargo @cargoArgs
-        if ($LASTEXITCODE -ne 0) { throw "cargo build failed for $archAbi" }
-    } finally {
-        Pop-Location
-    }
+    Invoke-Native -Command 'cargo' -Arguments $cargoArgs -What "cargo build for $archAbi"
 
     $built = Join-Path $root "target\$($info.Triple)\$profile\libpdf_sak_lib.so"
     if (-not (Test-Path $built)) { throw "library not found at $built" }
@@ -234,13 +255,9 @@ foreach ($archAbi in $Abi) {
     $flavor = $flavorByAbi[$archAbi]
     $task = "assemble$($flavor.Substring(0,1).ToUpperInvariant())$($flavor.Substring(1))$buildType"
     Write-Host "==> Gradle $task ($archAbi)"
-    Push-Location $genDir
-    try {
-        & (Join-Path $genDir 'gradlew.bat') $task --console=plain -PndkDir=$ndk
-        if ($LASTEXITCODE -ne 0) { throw "gradle $task failed" }
-    } finally {
-        Pop-Location
-    }
+    Invoke-Native -Command (Join-Path $genDir 'gradlew.bat') -Arguments @(
+        $task, '--console=plain', "-PndkDir=$ndk"
+    ) -What "gradle $task" -WorkingDirectory $genDir
 
     $apkDir = Join-Path $appDir "build\outputs\apk\$flavor\$($buildType.ToLowerInvariant())"
     $apks = Get-ChildItem $apkDir -Filter '*.apk' -ErrorAction SilentlyContinue

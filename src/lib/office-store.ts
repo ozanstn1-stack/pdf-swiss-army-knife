@@ -9,6 +9,7 @@ import type { Deck, OfficeKind, TextDocument, Workbook } from "./office-types";
 import { newDeck, newTextDocument, newWorkbook, uid } from "./office-types";
 export type { Deck, Slide, SlideObject, TextDocument, Workbook } from "./office-types";
 import * as api from "./office-api";
+import { toAppError } from "./api";
 
 export type OfficeModel = TextDocument | Workbook | Deck;
 
@@ -501,7 +502,6 @@ export async function openOfficePath(path: string): Promise<OpenPathResult> {
     });
     return { ok: true, kind: result.kind };
   } catch (error) {
-    const message = error instanceof Error ? error.message : typeof error === "object" && error && "message" in error ? String((error as { message: unknown }).message) : String(error);
-    return { ok: false, error: message };
+    return { ok: false, error: toAppError(error).message };
   }
 }

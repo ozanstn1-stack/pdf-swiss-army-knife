@@ -6,7 +6,7 @@
  * the model runs on input. Structural changes (lists, tables, images, page
  * setup, styles) mutate the model directly, which keeps DOCX/ODT export exact.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import {
@@ -61,7 +61,7 @@ import {
   splitRuns,
   wordRangeAt,
 } from "./writer/runs";
-import { caretOffset, caretOnFirstLine, caretOnLastLine, selectedRange, setCaretOffset } from "./writer/caret";
+import { caretOffset, caretOnFirstLine, caretOnLastLine, repaintParagraph, selectedRange, setCaretOffset } from "./writer/caret";
 import { domToRuns, runsToHtml, wrapCellRuns } from "./writer/writerDom";
 import { emptyRun as emptyWriterRun } from "./writer/runs";
 
@@ -103,9 +103,9 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
   const [selectedImage, setSelectedImage] = useState<number | null>(null);
   const [pages, setPages] = useState(1);
   const bodyRef = useRef<HTMLDivElement>(null);
-  // Caret the model wants placed after a structural edit, consumed by the
-  // paragraph effect once React has re-rendered it.
-  const caretRequest = useRef<{ index: number; offset: number } | null>(null);
+  // Caret the model wants placed after a structural edit. It is consumed by
+  // the layout effect below, in the same commit that renders the new blocks.
+  const pendingFocus = useRef<{ index: number; offset: number; scope: string } | null>(null);
   const picker = useTablePicker();
 
   const document = tab.model;
@@ -113,6 +113,18 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
 
   useEditorShortcuts(session, { onFind: () => setFindOpen(true), onReplace: () => setFindOpen(true) });
 
+  // Places the caret for a structural edit as part of the same commit. A
+  // `setTimeout` version raced fast typing: the next keystroke reached the DOM
+  // before focus had moved and was lost.
+  useLayoutEffect(() => {
+    const request = pendingFocus.current;
+    if (!request) return;
+    pendingFocus.current = null;
+    const target = window.document.querySelector<HTMLElement>(`[data-scope="${request.scope}"][data-block-index="${request.index}"]`);
+    if (!target) return;
+    target.focus();
+    setCaretOffset(target, request.offset);
+  });
 
   // Ctrl+Enter inserts a real page break at the caret.
   useEffect(() => {
@@ -426,9 +438,9 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
   /**
    * Applies a structural edit to the block list.
    *
-   * Every branch works on a copy of the model and writes the caret position
-   * back through `caretRequest`, because React re-renders the paragraph after
-   * the model changes and the browser caret would otherwise be lost.
+   * Every branch works on a copy of the model, repaints the affected
+   * paragraphs in the DOM (a focused contentEditable is not re-rendered by
+   * React) and restores the caret once the model change has committed.
    */
   const handleStructure = (action: StructureAction, scope: "body" | "header" | "footer" | "cell") => {
     if (scope === "cell") return; // cell editing keeps the simple single-paragraph model
@@ -438,13 +450,21 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
     const paragraph = block.type === "paragraph" ? block : null;
 
     const focusParagraph = (index: number, offset: number) => {
-      caretRequest.current = { index, offset };
-      window.setTimeout(() => {
-        const target = window.document.querySelector<HTMLElement>(`[data-scope="${scope}"][data-block-index="${index}"]`);
-        if (!target) return;
-        target.focus();
-        setCaretOffset(target, offset);
-      }, 0);
+      pendingFocus.current = { index, offset, scope };
+    };
+
+    /**
+     * Writes the model's runs into a paragraph element immediately.
+     *
+     * React leaves a focused contentEditable's children alone (that is what
+     * keeps native typing and IME working), so after a structural edit the
+     * element still shows the pre-edit text. Moving focus away fires `blur`,
+     * whose handler reads the DOM and writes it back into the model - undoing
+     * the edit. Repainting before the focus moves keeps blur honest.
+     */
+    const repaintAt = (index: number, runs: Run[]) => {
+      const element = window.document.querySelector<HTMLElement>(`[data-scope="${scope}"][data-block-index="${index}"]`);
+      if (element) repaintParagraph(element, runs);
     };
 
     switch (action.kind) {
@@ -461,6 +481,7 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
         blocks[action.index] = { ...paragraph, runs: left };
         blocks.splice(action.index + 1, 0, { type: "paragraph", props: nextParagraphProps(paragraph.props, headText), runs: tail });
         withBlocks(blocks);
+        repaintAt(action.index, left);
         focusParagraph(action.index + 1, 0);
         return;
       }
@@ -477,9 +498,11 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
           return;
         }
         const caret = runsText(previous.runs).length;
-        blocks[action.index - 1] = { ...previous, runs: joinRuns(previous.runs, paragraph.runs) };
+        const merged = joinRuns(previous.runs, paragraph.runs);
+        blocks[action.index - 1] = { ...previous, runs: merged };
         blocks.splice(action.index, 1);
         withBlocks(blocks);
+        repaintAt(action.index - 1, merged);
         focusParagraph(action.index - 1, caret);
         return;
       }
@@ -492,9 +515,11 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
           return;
         }
         const caret = runsText(paragraph.runs).length;
-        blocks[action.index] = { ...paragraph, runs: joinRuns(paragraph.runs, next.runs) };
+        const merged = joinRuns(paragraph.runs, next.runs);
+        blocks[action.index] = { ...paragraph, runs: merged };
         blocks.splice(action.index + 1, 1);
         withBlocks(blocks);
+        repaintAt(action.index, merged);
         focusParagraph(action.index, caret);
         return;
       }
@@ -1108,21 +1133,27 @@ function ParagraphView({
   // Caret to restore after a structural change, consumed by the effect below.
   const pendingCaret = useRef<number | null>(null);
 
-  useEffect(() => {
+  // Layout effect: the parent places the caret in its own layout effect right
+  // after this one, so the content has to be in the DOM first. Child layout
+  // effects run before the parent's, which makes that ordering guaranteed.
+  useLayoutEffect(() => {
     if (!ref.current) return;
+    const html = runsToHtml(block.runs);
     if (!focused) {
-      const html = runsToHtml(block.runs);
       if (ref.current.innerHTML !== html) ref.current.innerHTML = html;
       return;
     }
     // While focused the browser owns the DOM, but a structural change (Enter,
-    // Backspace merge) rewrote the runs underneath us - repaint and restore.
-    if (pendingCaret.current === null) return;
-    const at = pendingCaret.current;
+    // Backspace merge) rewrote the runs underneath us. When the text on screen
+    // and the model disagree, the DOM is stale: repaint it and restore the
+    // caret, otherwise the next blur writes the stale text back over the edit.
+    const modelText = runsText(block.runs);
+    const domText = runsText(domToRuns(ref.current));
+    if (modelText === domText && pendingCaret.current === null) return;
+    const at = pendingCaret.current ?? caretOffset(ref.current);
     pendingCaret.current = null;
-    const html = runsToHtml(block.runs);
     if (ref.current.innerHTML !== html) ref.current.innerHTML = html;
-    setCaretOffset(ref.current, at);
+    setCaretOffset(ref.current, Math.min(at, modelText.length));
   }, [block.runs, focused]);
 
   const heading = props.style.startsWith("Heading");
@@ -1147,6 +1178,8 @@ function ParagraphView({
           const [left, right] = splitAtLineBreak(plain, to);
           const tail = replaceRange(right, 0, 0, "\n");
           onStructure({ kind: "replace", index, block: { ...block, runs: insertText(joinRuns(left, tail), from, "") } });
+          // The repaint below puts the caret after the new line break.
+          pendingCaret.current = from + 1;
           return;
         }
         event.preventDefault();

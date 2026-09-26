@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FilePlus2, FileSpreadsheet, FileText, History, Presentation, RotateCcw, X } from "lucide-react";
 import { isOfficePath, openOfficePath, useRecovery, useOfficeTabs } from "../lib/office-store";
 import type { OfficeKind } from "../lib/office-types";
-import { useDev, useSettings, useToasts } from "../lib/store";
+import { errorMessage, useDev, useSettings, useToasts } from "../lib/store";
 import { useT } from "../lib/i18n";
 import * as api from "../lib/office-api";
 import { Dialog } from "./office-ui";
@@ -305,7 +305,7 @@ function VersionHistoryDialog({ documentId, onClose }: { documentId: string; onC
         if (alive) setEntries([...list].sort((a, b) => b.version - a.version));
       })
       .catch((error) => {
-        if (alive) useToasts.getState().push({ kind: "error", title: t("common.error"), detail: String(error) });
+        if (alive) useToasts.getState().push({ kind: "error", title: t("common.error"), detail: errorMessage(error, t) });
       })
       .finally(() => {
         if (alive) setBusy(false);
@@ -323,7 +323,7 @@ function VersionHistoryDialog({ documentId, onClose }: { documentId: string; onC
       useToasts.getState().push({ kind: "success", title: t("office.versionRestored"), detail: `v${version}` });
       onClose();
     } catch (error) {
-      useToasts.getState().push({ kind: "error", title: t("common.error"), detail: String(error) });
+      useToasts.getState().push({ kind: "error", title: t("common.error"), detail: errorMessage(error, t) });
       setBusy(false);
     }
   };

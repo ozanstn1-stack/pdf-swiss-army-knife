@@ -3,7 +3,8 @@
 //! Export covers values, formulas, styling, number formats, column widths, row
 //! heights, merges, freeze panes, gridline settings, defined names, autofilters,
 //! tab colours, hyperlinks, cell comments, data validation, conditional
-//! formatting, sheet protection and print layout. Import uses the well-tested
+//! formatting, sheet protection, print layout and charts (column, bar, line,
+//! pie, area) as real ChartML parts anchored to their cells. Import uses the well-tested
 //! `calamine` parser so XLSX, XLS and ODS files from Excel and LibreOffice open
 //! reliably; formatting is imported with limited support and that limitation is
 //! reported to the user.
@@ -274,7 +275,13 @@ struct SheetPart {
     comments: Vec<(String, String)>,
 }
 
-fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, shared_index: &mut BTreeMap<String, usize>) -> SheetPart {
+fn sheet_xml(
+    sheet: &Sheet,
+    drawing_number: Option<usize>,
+    styles: &mut StyleTable,
+    shared: &mut Vec<String>,
+    shared_index: &mut BTreeMap<String, usize>,
+) -> SheetPart {
     let mut writer = XmlWriter::new();
     writer.declaration();
     writer.raw(
@@ -495,6 +502,18 @@ fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, s
 
     writer.raw(&print_settings_xml(sheet));
 
+    // Charts live in a drawing part; the worksheet only points at it. Per
+    // CT_Worksheet the `<drawing>` element sits between the print settings and
+    // the legacy (comment) drawing.
+    if let Some(number) = drawing_number {
+        rels.push((
+            "rIdDrawing".into(),
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing".into(),
+            format!("../drawings/drawing{number}.xml"),
+        ));
+        writer.raw("<drawing r:id=\"rIdDrawing\"/>");
+    }
+
     if !comments.is_empty() {
         rels.push((
             "rIdComments".into(),
@@ -523,65 +542,68 @@ fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, s
 /// reports through the import/export warnings rather than emitting a broken
 /// package.
 fn conditional_formatting_xml(rule: &CondRule, index: usize) -> Option<String> {
+    let priority = index + 1;
+    let stop = if rule.stop_if_true { " stopIfTrue=\"1\"" } else { "" };
+    let range = escape_attr(&rule.range);
     let dxf = CONDITIONAL_DXF_ID;
-    // (rule type, operator, formula body). The formula carries the rule
-    // threshold; a rule kind with no XLSX equivalent returns None.
-    let (kind, operator, formula): (&str, &str, Option<String>) = match rule.kind.as_str() {
-        "greater" => ("cellIs", "greaterThan", Some(format!("&gt;{}", escape_text(first_value(rule, "0"))))),
-        "less" => ("cellIs", "lessThan", Some(format!("&lt;{}", escape_text(first_value(rule, "0"))))),
-        "equal" => ("cellIs", "equal", Some(escape_text(first_value(rule, "0")))),
+    let anchor = anchor_of(&rule.range);
+
+    // A data bar does not use the shared dxf: its colour lives in the rule.
+    if rule.kind == "dataBar" {
+        let color = rule.fill.as_deref().map(argb_of).unwrap_or_else(|| "FF638EC6".into());
+        return Some(format!(
+            "<conditionalFormatting sqref=\"{range}\"><cfRule type=\"dataBar\" priority=\"{priority}\"{stop}><dataBar><cfvo type=\"min\"/><cfvo type=\"max\"/><color rgb=\"{color}\"/></dataBar></cfRule></conditionalFormatting>"
+        ));
+    }
+
+    // (attributes, formula body) for the remaining rule kinds. The editor
+    // writes `textContains` / `duplicate`; older files may carry the shorter
+    // spellings, so both are accepted.
+    let (attributes, formula): (String, String) = match rule.kind.as_str() {
+        "greater" => (
+            format!("type=\"cellIs\" dxfId=\"{dxf}\" priority=\"{priority}\"{stop} operator=\"greaterThan\""),
+            format!("&gt;{}", escape_text(first_value(rule, "0"))),
+        ),
+        "less" => (
+            format!("type=\"cellIs\" dxfId=\"{dxf}\" priority=\"{priority}\"{stop} operator=\"lessThan\""),
+            format!("&lt;{}", escape_text(first_value(rule, "0"))),
+        ),
+        "equal" => (
+            format!("type=\"cellIs\" dxfId=\"{dxf}\" priority=\"{priority}\"{stop} operator=\"equal\""),
+            escape_text(first_value(rule, "0")),
+        ),
         "between" => (
-            "cellIs",
-            "between",
-            Some(format!("{}~{}", escape_text(first_value(rule, "0")), escape_text(second_value(rule, "0")))),
+            format!("type=\"cellIs\" dxfId=\"{dxf}\" priority=\"{priority}\"{stop} operator=\"between\""),
+            format!("{}~{}", escape_text(first_value(rule, "0")), escape_text(second_value(rule, "0"))),
         ),
-        "text" => (
-            "containsText",
-            "containsText",
-            Some(format!(
-                "NOT(ISERROR(SEARCH(&quot;{}&quot;,{})))",
-                escape_text(first_value(rule, "")),
-                anchor_of(&rule.range)
-            )),
+        "text" | "textContains" => (
+            format!(
+                "type=\"containsText\" dxfId=\"{dxf}\" priority=\"{priority}\"{stop} operator=\"containsText\" text=\"{}\"",
+                escape_attr(first_value(rule, ""))
+            ),
+            format!("NOT(ISERROR(SEARCH(&quot;{}&quot;,{})))", escape_text(first_value(rule, "")), anchor),
         ),
-        "duplicates" => (
-            "duplicateValues",
-            "duplicateValues",
-            Some(format!("COUNTIF({},{})>1", anchor_of(&rule.range), anchor_of(&rule.range))),
+        "duplicates" | "duplicate" => (
+            format!("type=\"duplicateValues\" dxfId=\"{dxf}\" priority=\"{priority}\"{stop}"),
+            format!("COUNTIF({anchor},{anchor})>1"),
         ),
-        "top" => (
-            "top10",
-            "greaterThanOrEqual",
-            Some(format!(
-                "{}&gt;=LARGE({},{})",
-                anchor_of(&rule.range),
-                anchor_of(&rule.range),
-                rule.top_n.unwrap_or(10)
-            )),
-        ),
-        "bottom" => (
-            "top10",
-            "lessThanOrEqual",
-            Some(format!(
-                "{}&lt;=SMALL({},{})",
-                anchor_of(&rule.range),
-                anchor_of(&rule.range),
-                rule.top_n.unwrap_or(10)
-            )),
-        ),
-        // A data bar needs a different cfRule shape; it stays in .oswk and the
-        // export reports it instead of emitting something Excel would reject.
+        "top" | "bottom" => {
+            let rank = rule.top_n.unwrap_or(10);
+            let bottom = if rule.kind == "bottom" { " bottom=\"1\"" } else { "" };
+            (
+                format!("type=\"top10\" dxfId=\"{dxf}\" priority=\"{priority}\"{stop} rank=\"{rank}\"{bottom}"),
+                String::new(),
+            )
+        }
         _ => return None,
     };
-    let stop = if rule.stop_if_true { " stopIfTrue=\"1\"" } else { "" };
-    let rank = if rule.kind == "bottom" { " bottom=\"1\"" } else { "" };
-    let formulas = formula
-        .map(|body| format!("<formula>{body}</formula>"))
-        .unwrap_or_default();
+    let formulas = if formula.is_empty() {
+        String::new()
+    } else {
+        format!("<formula>{formula}</formula>")
+    };
     Some(format!(
-        "<conditionalFormatting sqref=\"{}\"><cfRule type=\"{kind}\" dxfId=\"{dxf}\" priority=\"{}\"{stop} operator=\"{operator}\"{rank}>{formulas}</cfRule></conditionalFormatting>",
-        escape_attr(&rule.range),
-        index + 1
+        "<conditionalFormatting sqref=\"{range}\"><cfRule {attributes}>{formulas}</cfRule></conditionalFormatting>"
     ))
 }
 
@@ -605,6 +627,192 @@ const CONDITIONAL_DXF_ID: usize = 0;
 /// Highlight colour used by the single shared differential format.
 const CONDITIONAL_FILL: &str = "#FFF3C4";
 
+// ---------------------------------------------------------------------------
+// Charts
+// ---------------------------------------------------------------------------
+
+/// A chart that made it into the package, ready to be written.
+struct PlannedChart {
+    /// Position in the package-wide `xl/charts/chartN.xml` numbering.
+    chart_number: usize,
+    xml: String,
+    anchor: String,
+    width_px: f64,
+    height_px: f64,
+}
+
+/// The chart kinds the exporter writes as real ChartML parts.
+fn chart_kind_supported(kind: &str) -> bool {
+    matches!(kind, "column" | "bar" | "line" | "pie" | "area")
+}
+
+/// Quotes a sheet name when a formula reference needs it (`'My Sheet'!`).
+fn sheet_ref(name: &str) -> String {
+    let simple = !name.is_empty() && name.chars().all(|character| character.is_ascii_alphanumeric() || character == '_');
+    if simple {
+        name.to_string()
+    } else {
+        format!("'{}'", name.replace('\'', "''"))
+    }
+}
+
+/// `A1:B5` (relative, no sheet) as `Sheet!$A$1:$B$5`. `None` when malformed.
+fn absolute_ref(range: &str, sheet: &str) -> Option<String> {
+    let range = range.trim();
+    if range.is_empty() {
+        return None;
+    }
+    if let Some((start, end)) = range.split_once(':') {
+        let (start_row, start_col) = crate::address::parse(start)?;
+        let (end_row, end_col) = crate::address::parse(end)?;
+        Some(format!(
+            "{}!${}${}:${}${}",
+            sheet_ref(sheet),
+            crate::address::column_name(start_col),
+            start_row + 1,
+            crate::address::column_name(end_col),
+            end_row + 1
+        ))
+    } else {
+        let (row, column) = crate::address::parse(range)?;
+        Some(format!("{}!${}${}", sheet_ref(sheet), crate::address::column_name(column), row + 1))
+    }
+}
+
+/// A rich-text chart or axis title.
+fn chart_title_xml(text: &str) -> String {
+    format!(
+        "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title>",
+        escape_text(text)
+    )
+}
+
+const CHART_CATEGORY_AXIS: u64 = 111_111_111;
+const CHART_VALUE_AXIS: u64 = 222_222_222;
+
+/// The category + value axis pair shared by every cartesian chart kind.
+fn chart_axes_xml(chart: &ChartData) -> String {
+    let category_title = if chart.x_title.is_empty() { String::new() } else { chart_title_xml(&chart.x_title) };
+    let value_title = if chart.y_title.is_empty() { String::new() } else { chart_title_xml(&chart.y_title) };
+    format!(
+        "<c:catAx><c:axId val=\"{cat}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/>{category_title}<c:crossAx val=\"{val}\"/></c:catAx><c:valAx><c:axId val=\"{val}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"l\"/>{value_title}<c:crossAx val=\"{cat}\"/></c:valAx>",
+        cat = CHART_CATEGORY_AXIS,
+        val = CHART_VALUE_AXIS,
+    )
+}
+
+/// Builds one `xl/charts/chartN.xml`. `Err` carries the user-facing reason the
+/// chart cannot be represented; the caller keeps it in `.oswk` and warns.
+fn chart_xml(placement: &ChartPlacement, sheet_name: &str) -> Result<String, String> {
+    let chart = &placement.chart;
+    let kind = chart.kind.as_str();
+    if !chart_kind_supported(kind) {
+        return Err(format!("the chart type \"{kind}\" is not exportable"));
+    }
+    let categories = absolute_ref(&chart.categories, sheet_name).ok_or_else(|| "the category range could not be read".to_string())?;
+    if chart.series.is_empty() {
+        return Err("the chart has no data series".into());
+    }
+
+    let mut series_xml = String::new();
+    for (index, series) in chart.series.iter().enumerate() {
+        let values = absolute_ref(&series.range, sheet_name)
+            .ok_or_else(|| format!("the range for series \"{}\" could not be read", series.name))?;
+        series_xml.push_str(&format!(
+            "<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/><c:tx><c:v>{}</c:v></c:tx>",
+            escape_text(&series.name)
+        ));
+        if let Some(color) = series.color.as_deref() {
+            let argb = argb_of(color);
+            series_xml.push_str(&format!(
+                "<c:spPr><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill></c:spPr>",
+                argb.get(2..).unwrap_or("000000")
+            ));
+        }
+        series_xml.push_str(&format!(
+            "<c:cat><c:strRef><c:f>{}</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>{}</c:f></c:numRef></c:val></c:ser>",
+            // A sheet name can contain `&` or `<`; the reference has to be
+            // XML-escaped or the chart part stops being well-formed XML.
+            escape_text(&categories),
+            escape_text(&values)
+        ));
+    }
+
+    let labels = if chart.show_labels {
+        "<c:dLbls><c:showLegendKey val=\"0\"/><c:showVal val=\"1\"/><c:showCatName val=\"0\"/><c:showSerName val=\"0\"/><c:showPercent val=\"0\"/><c:showBubbleSize val=\"0\"/></c:dLbls>"
+    } else {
+        ""
+    };
+
+    let mut plot = String::new();
+    let mut axes = String::new();
+    match kind {
+        "column" | "bar" => {
+            let direction = if kind == "bar" { "bar" } else { "col" };
+            let grouping = if chart.stacked { "stacked" } else { "clustered" };
+            let overlap = if chart.stacked { "<c:overlap val=\"100\"/>" } else { "" };
+            plot.push_str(&format!(
+                "<c:barChart><c:barDir val=\"{direction}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{series_xml}{labels}<c:gapWidth val=\"150\"/>{overlap}<c:axId val=\"{cat}\"/><c:axId val=\"{val}\"/></c:barChart>",
+                cat = CHART_CATEGORY_AXIS,
+                val = CHART_VALUE_AXIS,
+            ));
+            axes = chart_axes_xml(chart);
+        }
+        "line" => {
+            plot.push_str(&format!(
+                "<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>{series_xml}{labels}<c:marker val=\"1\"/><c:axId val=\"{cat}\"/><c:axId val=\"{val}\"/></c:lineChart>",
+                cat = CHART_CATEGORY_AXIS,
+                val = CHART_VALUE_AXIS,
+            ));
+            axes = chart_axes_xml(chart);
+        }
+        "area" => {
+            let grouping = if chart.stacked { "stacked" } else { "standard" };
+            plot.push_str(&format!(
+                "<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{series_xml}{labels}<c:axId val=\"{cat}\"/><c:axId val=\"{val}\"/></c:areaChart>",
+                cat = CHART_CATEGORY_AXIS,
+                val = CHART_VALUE_AXIS,
+            ));
+            axes = chart_axes_xml(chart);
+        }
+        "pie" => {
+            plot.push_str(&format!(
+                "<c:pieChart><c:varyColors val=\"1\"/>{series_xml}{labels}<c:firstSliceAng val=\"0\"/></c:pieChart>"
+            ));
+        }
+        _ => return Err(format!("the chart type \"{kind}\" is not exportable")),
+    }
+
+    let title = if chart.title.is_empty() { String::new() } else { chart_title_xml(&chart.title) };
+    let legend = if chart.legend {
+        "<c:legend><c:legendPos val=\"b\"/><c:overlay val=\"0\"/></c:legend>"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><c:roundedCorners val=\"0\"/><c:chart>{title}<c:plotArea><c:layout/>{plot}{axes}</c:plotArea>{legend}<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart><c:printSettings><c:headerFooter/><c:pageMargins b=\"0.75\" l=\"0.7\" r=\"0.7\" t=\"0.75\" header=\"0.3\" footer=\"0.3\"/><c:pageSetup/></c:printSettings></c:chartSpace>"
+    ))
+}
+
+/// The drawing part that anchors a sheet's charts at their model positions.
+fn drawing_xml(charts: &[PlannedChart]) -> String {
+    let mut xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">",
+    );
+    for (index, chart) in charts.iter().enumerate() {
+        let (row, column) = crate::address::parse(&chart.anchor).unwrap_or((0, 0));
+        let cx = (chart.width_px.max(64.0) * 9525.0).round() as i64;
+        let cy = (chart.height_px.max(64.0) * 9525.0).round() as i64;
+        let rid = format!("rId{}", index + 1);
+        xml.push_str(&format!(
+            "<xdr:oneCellAnchor><xdr:from><xdr:col>{column}</xdr:col><xdr:colOff>190500</xdr:colOff><xdr:row>{row}</xdr:row><xdr:rowOff>95250</xdr:rowOff></xdr:from><xdr:ext cx=\"{cx}\" cy=\"{cy}\"/><xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"Chart {id}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"{rid}\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:oneCellAnchor>",
+            id = index + 1
+        ));
+    }
+    xml.push_str("</xdr:wsDr>");
+    xml
+}
+
 /// Paper size, orientation and print options for a sheet.
 fn print_settings_xml(sheet: &Sheet) -> String {
     let mut out = String::from("<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>");
@@ -623,34 +831,87 @@ fn print_settings_xml(sheet: &Sheet) -> String {
         u8::from(sheet.print.print_gridlines),
         u8::from(sheet.print.print_headings)
     ));
-    out.push_str(&format!(
-        "<headerFooter differentFirst=\"{}\" differentOddEven=\"{}\"><oddHeader>&amp;C{}</oddHeader></headerFooter>",
-        u8::from(sheet.print.different_first_page),
-        u8::from(sheet.print.different_odd_even),
-        escape_text(&sheet.print.header)
-    ));
+    if sheet.print.header.is_empty() {
+        // An empty `&C` header is what Excel writes, but readers such as
+        // openpyxl refuse to parse a format string with no text after it, so an
+        // empty header is omitted rather than written as `&C`.
+        out.push_str(&format!(
+            "<headerFooter differentFirst=\"{}\" differentOddEven=\"{}\"/>",
+            u8::from(sheet.print.different_first_page),
+            u8::from(sheet.print.different_odd_even)
+        ));
+    } else {
+        out.push_str(&format!(
+            "<headerFooter differentFirst=\"{}\" differentOddEven=\"{}\"><oddHeader>&amp;C{}</oddHeader></headerFooter>",
+            u8::from(sheet.print.different_first_page),
+            u8::from(sheet.print.different_odd_even),
+            escape_text(&sheet.print.header)
+        ));
+    }
     out
 }
 
 pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
     let mut warnings = Vec::new();
-    if workbook.sheets.iter().any(|sheet| !sheet.charts.is_empty()) {
-        warnings.push("Charts are kept in the native .oswk file; XLSX export does not embed them yet.".into());
-    }
     let mut styles = StyleTable::new();
     let mut shared: Vec<String> = Vec::new();
     let mut shared_index: BTreeMap<String, usize> = BTreeMap::new();
 
-    let mut sheet_parts: Vec<SheetPart> = Vec::new();
-    let mut sheet_names: Vec<String> = Vec::new();
+    // Chart references use the sheet name, so names are resolved first.
+    let sheet_names: Vec<String> = workbook
+        .sheets
+        .iter()
+        .enumerate()
+        .map(|(index, sheet)| {
+            let mut name = sheet.name.clone();
+            if name.is_empty() {
+                name = format!("Sheet{}", index + 1);
+            }
+            name.truncate(31);
+            name
+        })
+        .collect();
+
+    // Charts: a supported chart becomes a real ChartML part; anything the
+    // exporter cannot represent stays in `.oswk` and is reported instead of
+    // silently producing a package Excel would reject.
+    let mut chart_number = 0usize;
+    let mut sheet_charts: Vec<Vec<PlannedChart>> = Vec::new();
     for (index, sheet) in workbook.sheets.iter().enumerate() {
-        let mut name = sheet.name.clone();
-        if name.is_empty() {
-            name = format!("Sheet{}", index + 1);
+        let mut planned = Vec::new();
+        for placement in &sheet.charts {
+            match chart_xml(placement, &sheet_names[index]) {
+                Ok(xml) => {
+                    chart_number += 1;
+                    planned.push(PlannedChart {
+                        chart_number,
+                        xml,
+                        anchor: if placement.anchor.is_empty() { "A1".into() } else { placement.anchor.clone() },
+                        width_px: placement.width_px.max(64.0),
+                        height_px: placement.height_px.max(64.0),
+                    });
+                }
+                Err(reason) => warnings.push(format!(
+                    "Chart \"{}\" was kept in the .oswk file only: {reason}.",
+                    placement.chart.title
+                )),
+            }
         }
-        name.truncate(31);
-        sheet_names.push(name);
-        sheet_parts.push(sheet_xml(sheet, &mut styles, &mut shared, &mut shared_index));
+        sheet_charts.push(planned);
+    }
+
+    let mut sheet_parts: Vec<SheetPart> = Vec::new();
+    let mut sheet_drawings: Vec<Option<usize>> = Vec::new();
+    let mut drawing_number = 0usize;
+    for (index, sheet) in workbook.sheets.iter().enumerate() {
+        let drawing = if sheet_charts[index].is_empty() {
+            None
+        } else {
+            drawing_number += 1;
+            Some(drawing_number)
+        };
+        sheet_drawings.push(drawing);
+        sheet_parts.push(sheet_xml(sheet, drawing, &mut styles, &mut shared, &mut shared_index));
     }
 
     let mut zip = ZipWriter::new();
@@ -670,7 +931,9 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
     content_types.push_str("<Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>");
     content_types.push_str("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
     content_types.push_str("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
-    content_types.push_str("</Types>");
+    // `</Types>` is appended after every optional part below: comments and
+    // charts add overrides, and appending them after the closing tag produced
+    // a package no other reader would open.
 
     let mut root_rels = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
@@ -776,6 +1039,24 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
         content_types.push_str("<Default Extension=\"vml\" ContentType=\"application/vnd.openxmlformats-officedocument.vmlDrawing\"/>");
     }
 
+    for (index, charts) in sheet_charts.iter().enumerate() {
+        if charts.is_empty() {
+            continue;
+        }
+        if let Some(drawing) = sheet_drawings[index] {
+            content_types.push_str(&format!(
+                "<Override PartName=\"/xl/drawings/drawing{drawing}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>"
+            ));
+        }
+        for chart in charts {
+            content_types.push_str(&format!(
+                "<Override PartName=\"/xl/charts/chart{}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawingml.chart+xml\"/>",
+                chart.chart_number
+            ));
+        }
+    }
+
+    content_types.push_str("</Types>");
     zip.add_text("[Content_Types].xml", &content_types);
     zip.add_text("_rels/.rels", &root_rels);
     zip.add_text("docProps/core.xml", &core);
@@ -801,6 +1082,26 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
             zip.add_text(&format!("xl/worksheets/_rels/sheet{}.xml.rels", index + 1), &rels);
         }
     }
+    for (index, charts) in sheet_charts.iter().enumerate() {
+        let Some(drawing) = sheet_drawings[index] else { continue };
+        zip.add_text(&format!("xl/drawings/drawing{drawing}.xml"), &drawing_xml(charts));
+        let mut drawing_rels = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+        );
+        for (position, chart) in charts.iter().enumerate() {
+            drawing_rels.push_str(&format!(
+                "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart\" Target=\"../charts/chart{}.xml\"/>",
+                position + 1,
+                chart.chart_number
+            ));
+        }
+        drawing_rels.push_str("</Relationships>");
+        zip.add_text(&format!("xl/drawings/_rels/drawing{drawing}.xml.rels"), &drawing_rels);
+        for chart in charts {
+            zip.add_text(&format!("xl/charts/chart{}.xml", chart.chart_number), &chart.xml);
+        }
+    }
+
     if with_comments {
         // One comments part covering every sheet's notes, which is what Excel
         // produces for a workbook this size and keeps the package simple.
@@ -1081,6 +1382,191 @@ mod tests {
     fn rejects_garbage() {
         assert!(read_workbook_bytes(b"").is_err());
         assert!(read_workbook_bytes(&[0u8; 32]).is_err());
+    }
+
+    fn chart_placement(kind: &str) -> ChartPlacement {
+        ChartPlacement {
+            id: "chart-1".into(),
+            chart: ChartData {
+                kind: kind.into(),
+                title: "Sales".into(),
+                categories: "A2:A4".into(),
+                series: vec![ChartSeries { name: "Revenue".into(), range: "B2:B4".into(), color: None }],
+                legend: true,
+                x_title: "Month".into(),
+                y_title: "EUR".into(),
+                stacked: false,
+                show_labels: true,
+            },
+            anchor: "D2".into(),
+            width_px: 420.0,
+            height_px: 260.0,
+        }
+    }
+
+    #[test]
+    fn xlsx_exports_charts_as_chartml_parts() {
+        let mut workbook = sample_workbook();
+        workbook.sheets[0].charts.push(chart_placement("column"));
+        let result = write_xlsx_package(&workbook).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let reader = crate::zip::ZipReader::open(result.bytes.clone()).unwrap();
+        assert!(reader.contains("xl/charts/chart1.xml"));
+        assert!(reader.contains("xl/drawings/drawing1.xml"));
+        assert!(reader.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        let sheet = reader.read_text("xl/worksheets/sheet1.xml").unwrap();
+        assert!(sheet.contains("<drawing r:id=\"rIdDrawing\"/>"));
+        let rels = reader.read_text("xl/worksheets/_rels/sheet1.xml.rels").unwrap();
+        assert!(rels.contains("../drawings/drawing1.xml"));
+        let chart = reader.read_text("xl/charts/chart1.xml").unwrap();
+        assert!(chart.contains("<c:barChart>"));
+        assert!(chart.contains("<c:barDir val=\"col\"/>"));
+        assert!(chart.contains("Budget!$B$2:$B$4"));
+        assert!(chart.contains("Budget!$A$2:$A$4"));
+        assert!(chart.contains("<c:showVal val=\"1\"/>"));
+        assert!(chart.contains("<c:title>"));
+        let content_types = reader.read_text("[Content_Types].xml").unwrap();
+        assert!(content_types.contains("/xl/charts/chart1.xml"));
+        assert!(content_types.contains("/xl/drawings/drawing1.xml"));
+    }
+
+    #[test]
+    fn conditional_formatting_kinds_map_to_valid_cfrules() {
+        let mut workbook = sample_workbook();
+        let sheet = &mut workbook.sheets[0];
+        let rules: Vec<(&str, Vec<String>, Option<u32>)> = vec![
+            ("greater", vec!["10".into()], None),
+            ("less", vec!["5".into()], None),
+            ("between", vec!["1".into(), "9".into()], None),
+            ("equal", vec!["7".into()], None),
+            ("textContains", vec!["foo".into()], None),
+            ("text", vec!["legacy".into()], None),
+            ("duplicate", vec![], None),
+            ("duplicates", vec![], None),
+            ("top", vec!["3".into()], Some(3)),
+            ("bottom", vec![], Some(5)),
+            ("dataBar", vec![], None),
+        ];
+        for (kind, values, top_n) in rules {
+            sheet.conditional.push(CondRule {
+                id: format!("rule-{kind}"),
+                range: "B2:B5".into(),
+                kind: kind.into(),
+                values,
+                fill: Some("#FF0000".into()),
+                color: None,
+                top_n,
+                stop_if_true: false,
+            });
+        }
+        let bytes = write_xlsx(&workbook).unwrap();
+        let reader = crate::zip::ZipReader::open(bytes).unwrap();
+        let xml = reader.read_text("xl/worksheets/sheet1.xml").unwrap();
+        assert!(xml.contains("sqref=\"B2:B5\""));
+        assert!(xml.contains("operator=\"greaterThan\""));
+        assert!(xml.contains("operator=\"lessThan\""));
+        assert!(xml.contains("operator=\"between\""));
+        assert!(xml.contains("operator=\"equal\""));
+        assert!(xml.contains("type=\"containsText\""));
+        assert!(xml.contains("text=\"foo\""));
+        assert!(xml.contains("text=\"legacy\""));
+        assert_eq!(xml.matches("type=\"duplicateValues\"").count(), 2);
+        assert!(xml.contains("type=\"top10\"") && xml.contains("rank=\"3\""));
+        assert!(xml.contains("bottom=\"1\"") && xml.contains("rank=\"5\""));
+        assert!(xml.contains("type=\"dataBar\""));
+        assert!(xml.contains("<color rgb=\"FFFF0000\"/>"));
+    }
+
+    #[test]
+    fn content_types_stay_closed_after_every_optional_part() {
+        let mut workbook = sample_workbook();
+        workbook.sheets[0].set(
+            "E1",
+            Cell { value: CellValue::Text("note".into()), comment: Some("check".into()), ..Default::default() },
+        );
+        workbook.sheets[0].charts.push(chart_placement("column"));
+        let bytes = write_xlsx(&workbook).unwrap();
+        let reader = crate::zip::ZipReader::open(bytes).unwrap();
+        let content_types = reader.read_text("[Content_Types].xml").unwrap();
+        assert!(content_types.ends_with("</Types>"), "{content_types}");
+        assert_eq!(content_types.matches("</Types>").count(), 1);
+        assert!(content_types.contains("/xl/comments1.xml"));
+        assert!(content_types.contains("/xl/charts/chart1.xml"));
+    }
+
+    #[test]
+    fn pie_charts_skip_axes_and_use_a_single_vary_colors_series() {
+        let mut workbook = sample_workbook();
+        workbook.sheets[0].charts.push(chart_placement("pie"));
+        let bytes = write_xlsx(&workbook).unwrap();
+        let reader = crate::zip::ZipReader::open(bytes).unwrap();
+        let chart = reader.read_text("xl/charts/chart1.xml").unwrap();
+        assert!(chart.contains("<c:pieChart>"));
+        assert!(chart.contains("<c:varyColors val=\"1\"/>"));
+        assert!(!chart.contains("<c:catAx>"));
+    }
+
+    #[test]
+    fn bar_and_stacked_column_charts_use_the_right_direction() {
+        let mut workbook = sample_workbook();
+        workbook.sheets[0].charts.push(chart_placement("bar"));
+        let mut stacked = chart_placement("column");
+        stacked.chart.stacked = true;
+        workbook.sheets[0].charts.push(stacked);
+        let bytes = write_xlsx(&workbook).unwrap();
+        let reader = crate::zip::ZipReader::open(bytes).unwrap();
+        let first = reader.read_text("xl/charts/chart1.xml").unwrap();
+        assert!(first.contains("<c:barDir val=\"bar\"/>"));
+        let second = reader.read_text("xl/charts/chart2.xml").unwrap();
+        assert!(second.contains("<c:grouping val=\"stacked\"/>"));
+        assert!(second.contains("<c:overlap val=\"100\"/>"));
+    }
+
+    #[test]
+    fn unsupported_chart_kinds_are_reported_and_not_written() {
+        let mut workbook = sample_workbook();
+        workbook.sheets[0].charts.push(chart_placement("radar"));
+        let result = write_xlsx_package(&workbook).unwrap();
+        assert!(result.warnings.iter().any(|warning| warning.contains("radar")), "{:?}", result.warnings);
+        let reader = crate::zip::ZipReader::open(result.bytes.clone()).unwrap();
+        assert!(!reader.contains("xl/charts/chart1.xml"));
+    }
+
+    #[test]
+    fn chart_ranges_that_cannot_be_read_are_reported() {
+        let mut workbook = sample_workbook();
+        let mut broken = chart_placement("line");
+        broken.chart.series[0].range = "not a range".into();
+        workbook.sheets[0].charts.push(broken);
+        let result = write_xlsx_package(&workbook).unwrap();
+        assert!(result.warnings.iter().any(|warning| warning.contains("kept in the .oswk")), "{:?}", result.warnings);
+    }
+
+    #[test]
+    fn chart_references_quote_sheet_names_with_spaces() {
+        let mut workbook = sample_workbook();
+        workbook.sheets[0].name = "Q1 Sales".into();
+        workbook.sheets[0].charts.push(chart_placement("line"));
+        let bytes = write_xlsx(&workbook).unwrap();
+        let reader = crate::zip::ZipReader::open(bytes).unwrap();
+        let chart = reader.read_text("xl/charts/chart1.xml").unwrap();
+        assert!(chart.contains("'Q1 Sales'!$B$2:$B$4"));
+        assert!(chart.contains("<c:lineChart>"));
+    }
+
+    #[test]
+    fn chart_references_escape_sheet_names_that_break_xml() {
+        let mut workbook = sample_workbook();
+        workbook.sheets[0].name = "R&D <2026>".into();
+        workbook.sheets[0].charts.push(chart_placement("column"));
+        let bytes = write_xlsx(&workbook).unwrap();
+        let reader = crate::zip::ZipReader::open(bytes).unwrap();
+        let chart = reader.read_text("xl/charts/chart1.xml").unwrap();
+        assert!(chart.contains("&amp;"));
+        assert!(chart.contains("&lt;2026&gt;"));
+        assert!(!chart.contains("R&D <2026>"));
+        // The full part must still be well-formed XML.
+        assert!(chart.ends_with("</c:chartSpace>"));
     }
 
     #[test]

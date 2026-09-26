@@ -71,7 +71,7 @@ describe("library wiring", () => {
       "FILTER", "SORT", "SORTBY", "UNIQUE", "SEQUENCE", "LET",
       "SUMIFS", "COUNTIFS", "AVERAGEIFS", "MAXIFS", "MINIFS",
       "TEXTBEFORE", "TEXTAFTER", "TEXTSPLIT", "FIND", "SEARCH", "REPLACE", "EXACT",
-      "EDATE", "EOMONTH", "NETWORKDAYS", "WORKDAY", "DAYS", "DATEDIF", "WEEKDAY",
+      "EDATE", "EOMONTH", "NETWORKDAYS", "WORKDAY", "DAYS", "DATEDIF", "WEEKDAY", "WEEKNUM", "ISOWEEKNUM",
       "PMT", "PV", "FV", "NPER", "RATE", "IRR", "XIRR", "NPV", "XNPV", "MIRR",
       "SLN", "SYD", "DB", "DDB", "EFFECT", "NOMINAL",
       "XLOOKUP", "XMATCH", "LOOKUP", "CHOOSE", "ROWS", "COLUMNS",
@@ -439,6 +439,38 @@ describe("date and time functions", () => {
 
   it("ISOWEEKNUM follows the ISO rule", () => {
     expect(n("=ISOWEEKNUM(45292)")).toBe(1);
+  });
+
+  it("WEEKNUM counts the week containing January 1 as week 1", () => {
+    // 45292 is Monday 2024-01-01, so every scheme starts that week at 1.
+    expect(n("=WEEKNUM(45292)")).toBe(1);
+    expect(n("=WEEKNUM(45292,2)")).toBe(1);
+    // Sunday 2024-01-07 closes week 1 under a Monday start, but opens week 2
+    // under a Sunday start.
+    expect(n("=WEEKNUM(45298,2)")).toBe(1);
+    expect(n("=WEEKNUM(45298,1)")).toBe(2);
+    // Monday 2024-01-08 starts week 2 under both.
+    expect(n("=WEEKNUM(45299,2)")).toBe(2);
+    expect(n("=WEEKNUM(45299,1)")).toBe(2);
+  });
+
+  it("WEEKNUM matches Excel on a Friday 1 January", () => {
+    // 44197 is Friday 2021-01-01; 44199 is the Sunday that starts week 2.
+    expect(n("=WEEKNUM(44197,1)")).toBe(1);
+    expect(n("=WEEKNUM(44197,2)")).toBe(1);
+    expect(n("=WEEKNUM(44199,1)")).toBe(2);
+  });
+
+  it("WEEKNUM supports the alternate start days and the ISO scheme", () => {
+    // 45322 is 2024-01-31, a Wednesday; type 13 starts the week on Wednesday,
+    // so Jan 31 begins the sixth week (Jan 3, 10, 17, 24 are the earlier ones).
+    expect(n("=WEEKNUM(45322,13)")).toBe(6);
+    expect(n("=WEEKNUM(45292,21)")).toBe(1);
+    expect(n("=ISOWEEKNUM(45292)")).toBe(n("=WEEKNUM(45292,21)"));
+  });
+
+  it("WEEKNUM rejects an unknown scheme instead of guessing", () => {
+    expect(code("=WEEKNUM(45292,99)")).toBe("#NUM!");
   });
 
   it("DATEVALUE parses an ISO string", () => {

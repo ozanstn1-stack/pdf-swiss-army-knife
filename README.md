@@ -9,8 +9,27 @@ Everything runs on your machine. Documents are never uploaded, there is no
 telemetry, and the app stays useful without an internet connection. Macros and
 embedded scripts in office files are never executed.
 
-**Version 2.1.0** · Platform: Windows (Tauri also targets Linux/macOS, but only
+**Version 2.2.0** · Platform: Windows (Tauri also targets Linux/macOS, but only
 Windows is built and verified here) · UI languages: English, Turkish.
+
+## What's new in 2.2.0
+
+- **Calc keyboard entry is fixed for real.** After committing a cell with
+  `Enter`, the next cell accepts typing immediately - the focus/commit race is
+  closed at the root (same-event focus restore, no stale editor state) and
+  covered by component tests.
+- **Writer structural editing no longer rewrites stale text.** Enter, Backspace
+  merge, Delete merge and Shift+Enter repaint the paragraph before focus moves,
+  so the on-screen text and the document model can no longer disagree.
+- **XLSX export now embeds charts** (column, bar, line, pie, area) as real
+  ChartML parts anchored to their cells, and writes conditional formatting for
+  every rule kind the editor offers - including data bars. Unsupported cases
+  are reported instead of vanishing.
+- **Hardened formula engine**: lowercase references and sheet names resolve
+  case-insensitively, malformed references fail with `#REF!` instead of
+  reading an empty cell, and `WEEKNUM` is available.
+- Chart and conditional-format XLSX packages were validated with an
+  independent reader (openpyxl) as well as the in-repo round-trip suite.
 
 ## Screenshots
 
@@ -33,10 +52,11 @@ These workflows were exercised on the built application and with automated tests
   document model (screenshot above). Round-trip tests cover DOCX/ODT/RTF with
   headings, bold/italic/underline, bullet and numbered lists, tables, images,
   page breaks and a header/footer with real `PAGE` / `NUMPAGES` fields.
-- **Calc**: click a cell → type a value → `Enter` commits and moves on; the
-  formula bar edits formulas. Opening the 100-row sample XLSX computes
-  `=SUM(...)`, `=AVERAGE(...)`, `=MAX(...)` and per-row `=B*C` correctly
-  (screenshot above).
+- **Calc**: click a cell → type a value → `Enter` commits and moves on → keep
+  typing without clicking; `Tab`/`Shift+Tab`, `F2`, the formula bar and arrow
+  navigation all work and are covered by component tests that reproduce the
+  former Enter race. Opening the 100-row sample XLSX computes `=SUM(...)`,
+  `=AVERAGE(...)`, `=MAX(...)` and per-row `=B*C` correctly (screenshot above).
 - **Impress**: opening the sample PPTX loads five slides with text, bullets,
   images, shapes, a table, speaker notes and transitions (screenshot above).
 - **PDF**: every tool from v1.x is unchanged and still covered by its tests.
@@ -69,20 +89,23 @@ These workflows were exercised on the built application and with automated tests
 ### Calc (spreadsheet)
 - XLSX, ODS, CSV/TSV import/export · XLS import (read-only) · PDF export
 - Virtualised grid, name box and formula bar, multi-sheet workbooks (add, rename, delete)
-- Formula engine with ~70 functions: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, COUNTBLANK, MEDIAN,
+- Formula engine with 160+ functions: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, COUNTBLANK, MEDIAN,
   STDEV, IF, IFS, IFERROR, AND, OR, NOT, ROUND/ROUNDUP/ROUNDDOWN, ABS, PRODUCT, SQRT, POWER, MOD,
   INT, CEILING, FLOOR, SUMIF(S), COUNTIF(S), AVERAGEIF, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH,
-  CONCAT, TEXTJOIN, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER, PROPER, SUBSTITUTE, REPT, TEXT,
-  VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, LARGE, SMALL, RANK, SUMPRODUCT,
-  ISNUMBER, ISTEXT, ISBLANK, ISERROR, PI, RAND, RANDBETWEEN
-  (cross-sheet references such as `=SUM(Data!D2:D101)` work)
-- Explicit errors instead of silent wrong answers: `#NAME?`, `#VALUE!`, `#REF!`, `#DIV/0!`, `#N/A`, `#NUM!`
-  and circular-reference detection
+  CONCAT, TEXTJOIN, TEXTBEFORE/AFTER/SPLIT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER, PROPER,
+  SUBSTITUTE, REPT, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, WEEKDAY,
+  WEEKNUM, ISOWEEKNUM, EDATE, EOMONTH, WORKDAY, NETWORKDAYS, LARGE, SMALL, RANK, SUMPRODUCT,
+  ISNUMBER, ISTEXT, ISBLANK, ISERROR, PI, RAND, RANDBETWEEN, financial and matrix functions,
+  `LET`, named ranges and inline array literals `{1,2;3,4}`
+  (A1, `$A$1`, mixed anchors and cross-sheet references such as `=SUM(Data!D2:D101)` all work)
+- Explicit errors instead of silent wrong answers: `#NAME?`, `#VALUE!`, `#REF!`, `#DIV/0!`, `#N/A`, `#NUM!`,
+  circular-reference detection, and invalid references (`=A0`) fail rather than reading an empty cell
 - Cell formatting (font, colour, fill, borders, alignment, wrap), number formats
   (General, Number, Currency, Percentage, Date, Time, Accounting), sorting, filtering,
   freeze panes, conditional formatting (greater/less/between/equal/text/duplicates/top-N/data bars),
   data validation (list and number range), row/column insert, delete and resize
 - SVG charts fed from cell ranges (column, bar, line, pie, area) that refresh with the data
+  and export to XLSX as real charts; conditional formatting exports as real `cfRule`s
 
 ### Impress (presentations)
 - PPTX and ODP import/export · PDF export · lossless `.oswk`
@@ -105,7 +128,7 @@ Reader with search, Merge, Split, Organize, Compress, OCR (Tesseract), Protect (
 Unlock, Watermark, Annotate, Metadata, Page tools (extract/delete/rotate/resize/crop/numbering),
 PDF → JPG/PNG, JPG/PNG → PDF, Batch processing, Info, optional offline AI assistant.
 
-Added since v2.0.0:
+Added in 2.1.0:
 
 - **Redact** — remove text and pixels permanently. Drag over the page, or let
   the detector find e-mail addresses, card numbers, IBANs, passport numbers
@@ -212,17 +235,25 @@ npm test
 npx tsc --noEmit
 ```
 
-223 Rust tests and 288 frontend tests pass.
+240 Rust tests and 325 frontend tests pass.
 
 - `pdfcore`: 60 unit tests plus integration suites for merge, split, page
   tools, compression, OCR, security, metadata, watermark, annotation,
   redaction, comparison and inspection
-- `officecore`: 62 unit tests (model, ZIP limits, XML, DOCX/ODT/ODS/ODP/RTF/XLSX/CSV/PPTX,
-  PDF layout, cleaner) + 8 round-trip tests against the sample documents
+- `officecore`: 70 unit tests (model, ZIP limits, XML, DOCX/ODT/ODS/ODP/RTF/XLSX/CSV/PPTX,
+  PDF layout, cleaner) + 8 round-trip tests against the sample documents and a
+  5-test XLSX round-trip suite (100-row golden workbook, cross-sheet formulas,
+  styles/merges/layout structure, validation + conditional formatting + charts,
+  and an explicit measurement of what a plain XLSX round trip drops)
 - `aicore`: 18 tests, `src-tauri`: 10 tests
-- Frontend: 288 tests covering the formula engine, writer runs and caret
-  logic, cell maths, i18n parity and redaction geometry, with a strict
+- Frontend: 325 tests covering the formula engine, writer runs and caret
+  logic, cell maths, i18n parity, redaction geometry and component tests that
+  drive the real Calc and Writer editors with the keyboard, with a strict
   TypeScript type check on top
+
+The XLSX chart and conditional-format packages are also opened with an
+independent reader (openpyxl) during development; the repository tests keep
+the structural checks so the package cannot silently regress.
 
 The redaction tests are the ones worth knowing about: they run the redaction,
 re-extract the text from the result and assert the target string is no longer
@@ -243,12 +274,14 @@ present. A black rectangle would pass a visual check and fail this one.
 - Writer uses a continuous page view with page-break markers; page setup, headers,
   footers, print and the exported PDF are page-accurate, but the on-screen canvas is not
   a full WYSIWYG pager.
-- After committing a cell with `Enter`, continuing to type without clicking the next cell
-  is not yet fully reliable; clicking the target cell always works. Fixing this race is the
-  next editor task.
-- XLSX export keeps values, formulas, styles, number formats, merges, column widths, row
-  heights, freeze panes, data validation and gridline settings, but does not embed charts or
-  conditional-formatting rules (they are kept in `.oswk`). Comments in imported files are not read.
+- XLSX export writes values, formulas, styles, number formats, merges, column widths, row
+  heights, freeze panes, data validation, conditional formatting and charts (column, bar,
+  line, pie, area). XLSX import reads values and formulas only, so formatting, layout,
+  validation, conditional rules and charts are not read back from an imported file; the
+  native `.oswk` format keeps everything. Cell comments are exported but not imported.
+- Exported charts are functional but use default styling beyond the properties the editor
+  stores (title, series names/colours, legend, axis titles, data labels); Excel themes and
+  fine-grained chart formatting are not written.
 - PPTX export does not embed charts; animations, SmartArt and grouped shapes are not imported.
 - DOCX import simplifies text boxes, SmartArt, equations, tracked changes and non page-number
   fields, and reports each case in the import warnings shown after opening.
@@ -260,11 +293,13 @@ present. A black rectangle would pass a visual check and fail this one.
 
 ## Roadmap
 
-- Reliable consecutive keyboard entry in Calc (focus after commit) and a full audit of the
-  remaining automation-visible issues
+Planned for the next stages (V2.5 / V3.0); deliberately out of scope for 2.2.0:
+
 - True paginated Writer canvas with live layout
-- XLSX chart and conditional-formatting export; PPTX chart import/export
-- Frontend unit tests (vitest) for the formula engine and model helpers
+- Track changes, footnotes and a full Writer layout engine
+- PPTX chart import/export; SmartArt and grouped-shape import
+- Pivot tables, dynamic arrays and a dependency-graph recalculation engine
+- Master slides and a presentation animation engine
 - Optional AI assistant actions for office documents (summarise, rewrite, suggest formulas)
 
 ## License

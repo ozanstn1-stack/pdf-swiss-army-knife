@@ -3,7 +3,7 @@
  * formatting, multiple sheets, sorting, conditional formatting, validation
  * and SVG charts fed from cell ranges.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlignCenter,
   AlignLeft,
@@ -35,7 +35,7 @@ import type { OfficeTab, Workbook } from "../lib/office-store";
 import { useOfficeTabs } from "../lib/office-store";
 import { useT } from "../lib/i18n";
 import { useToasts } from "../lib/store";
-import { cellText, defaultCellStyle, defaultPrintSettings, emptyCell, newSheet, type Cell, type CellStyle, type ChartData, type NamedRange, type PrintSettings, type Sheet } from "../lib/office-types";
+import { cellText, defaultCellStyle, defaultPrintSettings, emptyCell, newSheet, type Cell, type CellStyle, type ChartData, type CondRule, type NamedRange, type PrintSettings, type Sheet } from "../lib/office-types";
 import {
   addressesInRange,
   columnLabel,
@@ -165,7 +165,13 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   // so fast typing never loses characters. When the editor closes again the
   // focus goes back to the grid, which is what keeps arrow keys, Tab and plain
   // character entry alive after Enter.
-  useEffect(() => {
+  //
+  // This is a layout effect on purpose. A passive effect runs after paint, so
+  // a keystroke that arrives between Enter and the effect was dispatched to
+  // `<body>` and swallowed; the next cell only accepted input after a click.
+  // Layout effects are flushed at the end of the same discrete event, before
+  // the browser can deliver the following keydown.
+  useLayoutEffect(() => {
     if (editing) {
       const input = cellInputRef.current;
       if (!input) return;
@@ -224,14 +230,17 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
     [sheet],
   );
 
-  const commitEdit = (move: CommitMove = "down") => {
+  const commitEdit = (move: CommitMove = "down", restoreFocus = true) => {
     // Read through the ref: the blur handler triggered by unmounting the editor
     // would otherwise commit the same value a second time.
     const current = editingRef.current;
     if (!current) return;
     editingRef.current = null;
     setEditingState(null);
-    restoreGridFocusRef.current = true;
+    // A blur commit means focus has already moved somewhere on purpose (the
+    // formula bar, another editor); only keyboard commits pull it back to the
+    // grid, otherwise clicking the formula bar would lose focus to the grid.
+    restoreGridFocusRef.current = restoreFocus;
 
     const { row, col, value } = current;
     update((current_workbook) => applyCellEdit(current_workbook, sheetIndex, row, col, value));
@@ -246,6 +255,10 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
     const step = delta[move];
     const next = revealCell({ row: row + step.row, col: col + step.col });
     setSelection({ anchor: next, focus: next });
+    // Move focus in the same event, not in the effect: when the commit came
+    // from the formula bar the editor state was already null, so no effect
+    // would run at all and the grid stayed unfocused.
+    if (restoreFocus) gridRef.current?.focus({ preventScroll: true });
   };
 
   const applyStyle = (patch: Partial<CellStyle>) => {
@@ -332,6 +345,9 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     // Keys typed inside the inline editor belong to the editor only.
     if ((event.target as HTMLElement).closest("input, textarea, [contenteditable=true]")) return;
+    // IME composition (dead keys, accented input) must never open the inline
+    // editor or move the selection; the composition events own those keys.
+    if (event.nativeEvent.isComposing) return;
     const { row, col } = selection.focus;
     const mod = event.ctrlKey || event.metaKey;
     const move = (dRow: number, dCol: number, extend = false) => {
@@ -343,7 +359,11 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
       event.preventDefault();
       setEditing({ row, col, value: value ?? activeCell?.formula ?? cellText(activeCell) });
     };
-    if (editing) return;
+    // Read through the ref, not the state: a keystroke that lands right after
+    // `Enter` commits the cell is handled by the previous render's closure,
+    // whose `editing` is still non-null. That stale check was what made
+    // consecutive typing unreliable.
+    if (editingRef.current) return;
     switch (event.key) {
       case "ArrowUp":
         move(-1, 0, event.shiftKey);
@@ -687,6 +707,55 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
     return parts ?? { start: selection.anchor, end: selection.focus };
   }, [selection]);
 
+  // Conditional formatting is evaluated once per sheet/data change instead of
+  // per visible cell. The old per-cell `conditionalFill` rescanned the rule
+  // range for every cell in the viewport, which made a 5 000-cell rule
+  // quadratic on the render path.
+  const conditionalFills = useMemo(() => {
+    const fills = new Map<string, string>();
+    for (const rule of sheet.conditional) {
+      if (rule.kind === "dataBar" || fills.size >= 50_000) continue;
+      const addresses = addressesInRange(rule.range, 5000);
+      if (addresses.length === 0) continue;
+      const values = addresses.map((address) => computed.get(address) ?? "");
+      const numbers = values.map((value) => (typeof value === "number" ? value : Number(value)));
+      const limit = Math.max(1, rule.topN ?? 10);
+      const sorted = [...numbers.filter(Number.isFinite)].sort((a, b) => b - a);
+      const threshold = sorted[Math.min(limit, sorted.length) - 1] ?? Number.POSITIVE_INFINITY;
+      const counts = new Map<string, number>();
+      if (rule.kind === "duplicate") {
+        for (const value of values) {
+          const key = String(value ?? "");
+          if (key !== "") counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+      }
+      addresses.forEach((address, index) => {
+        // First matching rule wins, in the order the rules are listed.
+        if (fills.has(address)) return;
+        const fill = ruleFill(rule, values[index], numbers[index], counts, threshold);
+        if (fill) fills.set(address, fill);
+      });
+    }
+    return fills;
+  }, [sheet, computed]);
+
+  // One pass over the data-bar rules: the scale of a bar is relative to the
+  // largest value in its range, which is how every spreadsheet draws them.
+  const dataBars = useMemo(() => {
+    const bars = new Map<string, { max: number; fill: string }>();
+    for (const rule of sheet.conditional) {
+      if (rule.kind !== "dataBar") continue;
+      const addresses = addressesInRange(rule.range, 5000);
+      let max = 0;
+      for (const address of addresses) {
+        const value = Math.abs(Number(computed.get(address) ?? 0));
+        if (Number.isFinite(value)) max = Math.max(max, value);
+      }
+      for (const address of addresses) bars.set(address, { max, fill: rule.fill ?? "#638EC6" });
+    }
+    return bars;
+  }, [sheet, computed]);
+
   const columnX = (col: number) => {
     let x = 0;
     for (let index = 0; index < col; index += 1) x += sheet.colWidths[String(index)] ?? DEFAULT_COL_WIDTH;
@@ -859,9 +928,10 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
             if (current) setEditing({ row: current.row, col: current.col, value: event.target.value });
           }}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter") {
               event.preventDefault();
-              if (editing) {
+              if (editingRef.current) {
                 commitEdit(event.shiftKey ? "up" : "down");
               } else {
                 // Typing straight into the formula bar and pressing Enter has to
@@ -873,7 +943,7 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
             }
             if (event.key === "Tab") {
               event.preventDefault();
-              if (editing) commitEdit(event.shiftKey ? "left" : "right");
+              if (editingRef.current) commitEdit(event.shiftKey ? "left" : "right");
             }
             if (event.key === "Escape") {
               event.preventDefault();
@@ -940,7 +1010,7 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
                   const width = sheet.colWidths[String(col)] ?? DEFAULT_COL_WIDTH;
                   const isEditing = editing?.row === row && editing?.col === col;
                   const inSelection = row >= selectionBounds.start.row && row <= selectionBounds.end.row && col >= selectionBounds.start.col && col <= selectionBounds.end.col;
-                  const fill = conditionalFill(sheet, address, value, computed);
+                  const fill = conditionalFills.get(address);
                   const style = cell?.style ?? defaultCellStyle();
                   const validation = sheet.validations.find((rule) => addressesInRange(rule.range, 100).includes(address));
                   const invalid = validation ? !isValid(validation, value) : false;
@@ -975,8 +1045,9 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
                           value={editing!.value}
                           autoFocus
                           onChange={(event) => setEditing({ row, col, value: event.target.value })}
-                          onBlur={() => commitEdit("none")}
+                          onBlur={() => commitEdit("none", false)}
                           onKeyDown={(event) => {
+                            if (event.nativeEvent.isComposing) return;
                             if (event.key === "Enter") {
                               event.preventDefault();
                               commitEdit(event.shiftKey ? "up" : "down");
@@ -1000,9 +1071,12 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
                       {style.borders.bottom ? <span className="cell-border bottom" /> : null}
                       {style.borders.left ? <span className="cell-border left" /> : null}
                       {style.borders.right ? <span className="cell-border right" /> : null}
-                      {sheet.conditional.some((rule) => rule.kind === "dataBar" && addressesInRange(rule.range, 100).includes(address)) ? (
-                        <span className="data-bar" style={{ width: `${Math.min(100, Math.abs(Number(value) || 0))}%` }} />
-                      ) : null}
+                      {(() => {
+                        const bar = dataBars.get(address);
+                        if (!bar) return null;
+                        const width = bar.max > 0 ? Math.min(100, (Math.abs(Number(value) || 0) / bar.max) * 100) : 0;
+                        return <span className="data-bar" style={{ width: `${width}%`, background: bar.fill }} />;
+                      })()}
                       {cell?.comment ? <span className="cell-comment-dot" title={cell.comment} /> : null}
                     </div>
                   );
@@ -1158,45 +1232,27 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
 // Derived data
 // ---------------------------------------------------------------------------
 
-function conditionalFill(sheet: Sheet, address: string, value: Scalar, all: Map<string, Scalar>): string | null {
-  for (const rule of sheet.conditional) {
-    const addresses = addressesInRange(rule.range, 5000);
-    if (!addresses.includes(address)) continue;
-    const number = typeof value === "number" ? value : Number(value);
-    const [first, second] = rule.values;
-    switch (rule.kind) {
-      case "greater":
-        if (Number.isFinite(number) && number > Number(first)) return rule.fill ?? "#FEE2E2";
-        break;
-      case "less":
-        if (Number.isFinite(number) && number < Number(first)) return rule.fill ?? "#FEE2E2";
-        break;
-      case "between":
-        if (Number.isFinite(number) && number >= Number(first) && number <= Number(second)) return rule.fill ?? "#FEF3C7";
-        break;
-      case "equal":
-        if (String(value) === String(first)) return rule.fill ?? "#DBEAFE";
-        break;
-      case "textContains":
-        if (String(value).toLowerCase().includes(String(first).toLowerCase())) return rule.fill ?? "#E0E7FF";
-        break;
-      case "duplicate": {
-        const others = addresses.filter((entry) => entry !== address).map((entry) => String(all.get(entry) ?? ""));
-        if (others.includes(String(value)) && String(value) !== "") return rule.fill ?? "#FECACA";
-        break;
-      }
-      case "top": {
-        const values = addresses.map((entry) => Number(all.get(entry) ?? 0)).filter(Number.isFinite).sort((a, b) => b - a);
-        const limit = Math.max(1, rule.topN ?? 10);
-        const threshold = values[Math.min(limit, values.length) - 1] ?? Number.POSITIVE_INFINITY;
-        if (Number.isFinite(number) && number >= threshold) return rule.fill ?? "#BBF7D0";
-        break;
-      }
-      default:
-        break;
-    }
+/** The highlight one rule paints on one cell, or null when it does not match. */
+function ruleFill(rule: CondRule, value: Scalar, number: number, counts: Map<string, number>, threshold: number): string | null {
+  const [first, second] = rule.values;
+  switch (rule.kind) {
+    case "greater":
+      return Number.isFinite(number) && number > Number(first) ? rule.fill ?? "#FEE2E2" : null;
+    case "less":
+      return Number.isFinite(number) && number < Number(first) ? rule.fill ?? "#FEE2E2" : null;
+    case "between":
+      return Number.isFinite(number) && number >= Number(first) && number <= Number(second) ? rule.fill ?? "#FEF3C7" : null;
+    case "equal":
+      return String(value) === String(first) ? rule.fill ?? "#DBEAFE" : null;
+    case "textContains":
+      return String(value).toLowerCase().includes(String(first).toLowerCase()) ? rule.fill ?? "#E0E7FF" : null;
+    case "duplicate":
+      return String(value ?? "") !== "" && (counts.get(String(value ?? "")) ?? 0) > 1 ? rule.fill ?? "#FECACA" : null;
+    case "top":
+      return Number.isFinite(number) && number >= threshold ? rule.fill ?? "#BBF7D0" : null;
+    default:
+      return null;
   }
-  return null;
 }
 
 function isValid(rule: { kind: string; values: string[]; min: number | null; max: number | null }, value: Scalar): boolean {
@@ -1429,7 +1485,7 @@ function ConditionalDialog({ onClose, onApply }: { onClose: () => void; onApply:
       <div className="stack">
         <label className="field">
           <span>{t("calc.rule")}</span>
-          <select value={kind} onChange={(event) => setKind(event.target.value)}>
+          <select value={kind} onChange={(event) => { setKind(event.target.value); if (event.target.value === "dataBar") setFill("#638EC6"); }}>
             <option value="greater">{t("calc.ruleGreater")}</option>
             <option value="less">{t("calc.ruleLess")}</option>
             <option value="between">{t("calc.ruleBetween")}</option>
@@ -1437,9 +1493,10 @@ function ConditionalDialog({ onClose, onApply }: { onClose: () => void; onApply:
             <option value="textContains">{t("calc.ruleText")}</option>
             <option value="duplicate">{t("calc.ruleDuplicate")}</option>
             <option value="top">{t("calc.ruleTop")}</option>
+            <option value="dataBar">{t("calc.ruleDataBar")}</option>
           </select>
         </label>
-        {kind === "duplicate" ? null : (
+        {kind === "duplicate" || kind === "dataBar" ? null : (
           <div className="row">
             <label className="field">
               <span>{t("calc.value")}</span>

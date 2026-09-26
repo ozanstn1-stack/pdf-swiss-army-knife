@@ -113,16 +113,37 @@ registerFunction("WEEKDAY", (args) => {
   if (Math.trunc(type) === 3) return index === 0 ? 6 : index - 1;
   return index + 1;
 }, 1, 2, false, { signature: "WEEKDAY(serial, [type])", category: "Date" });
-registerFunction("ISOWEEKNUM", (args) => {
-  const date = dateArg(args, 0);
-  if (isError(date)) return date;
-  // ISO week: the week containing the first Thursday of the year.
+/** ISO week: the week containing the first Thursday of the year. */
+function isoWeekNumber(date: Date): number {
   const thursday = new Date(date.getTime());
   thursday.setUTCDate(thursday.getUTCDate() + (3 - weekdayIndex(date)));
   const firstThursday = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 4));
   firstThursday.setUTCDate(firstThursday.getUTCDate() + (3 - weekdayIndex(firstThursday)));
   return Math.round((thursday.getTime() - firstThursday.getTime()) / (7 * 86_400_000)) + 1;
+}
+
+registerFunction("ISOWEEKNUM", (args) => {
+  const date = dateArg(args, 0);
+  if (isError(date)) return date;
+  return isoWeekNumber(date);
 }, 1, 1, false, { signature: "ISOWEEKNUM(serial)", category: "Date" });
+registerFunction("WEEKNUM", (args) => {
+  const date = dateArg(args, 0);
+  if (isError(date)) return date;
+  const type = numberArg(args, 1, 1);
+  if (isError(type)) return type;
+  const scheme = Math.trunc(type);
+  const day = utc(date);
+  if (scheme === 21) return isoWeekNumber(day);
+  // Excel schemes: 1 = Sunday, 2 = Monday, 11..17 = Monday..Sunday.
+  const startDay = scheme === 1 ? 0 : scheme === 2 ? 1 : scheme >= 11 && scheme <= 17 ? (scheme - 10) % 7 : null;
+  if (startDay === null) return ERR.num();
+  // Week 1 is the week that contains January 1, so the count starts from that
+  // week's start day, which can be in the previous calendar year.
+  const januaryFirst = new Date(Date.UTC(day.getUTCFullYear(), 0, 1));
+  const offset = (januaryFirst.getUTCDay() - startDay + 7) % 7;
+  return Math.floor((dateToSerial(day) - dateToSerial(januaryFirst) + offset) / 7) + 1;
+}, 1, 2, false, { signature: "WEEKNUM(serial, [type])", category: "Date" });
 registerFunction("DAYS", (args) => {
   const end = dateArg(args, 0);
   if (isError(end)) return end;

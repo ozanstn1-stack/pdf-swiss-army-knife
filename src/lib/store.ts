@@ -243,17 +243,27 @@ export const useOverwritePrompt = create<OverwriteState>((set, get) => ({
   },
 }));
 
+/**
+ * The user-facing text for any thrown value: the localized message for the
+ * error's code when one exists, otherwise the technical detail. Screens that
+ * show an error inline (per-file results, launch failures) should use this
+ * instead of reaching into `String(error)` themselves.
+ */
+export function errorMessage(error: unknown, t: (key: string, params?: Record<string, string | number>) => string): string {
+  const appError: AppError = toAppError(error);
+  const key = `errors.${appError.code}`;
+  const localized = t(key);
+  return localized === key ? appError.message : localized;
+}
+
 /** Reports an error to the user with a localized, friendly message. */
 export function reportError(error: unknown, t: (key: string, params?: Record<string, string | number>) => string) {
   const appError: AppError = toAppError(error);
   // Diagnostics: error code + message only (never document content).
   void import("./api").then(({ logFrontend }) => logFrontend("app-error", `${appError.code}: ${appError.message}`));
-  const key = `errors.${appError.code}`;
-  const localized = t(key);
-  const detail = localized === key ? appError.message : localized;
   useToasts.getState().push({
     kind: "error",
     title: t("errors.title"),
-    detail,
+    detail: errorMessage(error, t),
   });
 }

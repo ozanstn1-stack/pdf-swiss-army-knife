@@ -228,7 +228,10 @@ function readReference(input: string, index: number): { address: string; range: 
     }
   }
   void start;
-  return { address: input.slice(index, end).replace(/\$/g, ""), range, next: end };
+  // Excel references are case-insensitive: `a1` has to read the same cell as
+  // `A1`, so the address is normalised here rather than silently missing the
+  // value map later.
+  return { address: input.slice(index, end).replace(/\$/g, "").toUpperCase(), range, next: end };
 }
 
 // ---------------------------------------------------------------------------
@@ -380,8 +383,6 @@ class Parser {
         }
         return { type: "name", name: token.value };
       }
-      case "lbrace":
-        return this.parseArrayLiteral();
       case "lparen": {
         const inner = this.parseComparison();
         if (this.peek()?.type === "rparen") this.next();
@@ -494,11 +495,22 @@ function resolveName(name: string, state: EvalState): Scalar | CellMatrix {
   return result;
 }
 
+/**
+ * Resolves the sheet part of a reference to the workbook's own spelling, so
+ * `data!A1` finds the sheet named `Data`. `null` means "current sheet";
+ * `undefined` means no sheet with that name exists.
+ */
+function resolveSheetName(sheet: string | null, context: FormulaContext): string | null | undefined {
+  if (!sheet) return null;
+  if (context.sheetNames.includes(sheet)) return sheet;
+  return context.sheetNames.find((name) => name.toLowerCase() === sheet.toLowerCase());
+}
+
 function evaluateRange(node: Node, state: EvalState): CellMatrix | Scalar {
   const context = state.context;
   const node2 = node as Extract<Node, { type: "range" }>;
-  const sheet = node2.sheet ?? null;
-  if (sheet && !context.sheetNames.includes(sheet)) return ERR.ref();
+  const sheet = resolveSheetName(node2.sheet ?? null, context);
+  if (sheet === undefined) return ERR.ref();
   const parts = parseRange(node2.range);
   if (!parts) return ERR.ref();
   const limit = context.maxRangeCells ?? 200_000;
@@ -542,8 +554,12 @@ function evaluateNode(node: Node, state: EvalState): Scalar | CellMatrix {
     case "name":
       return resolveName(node.name, state);
     case "ref": {
-      const sheet = node.sheet ?? null;
-      if (sheet && !state.context.sheetNames.includes(sheet)) return ERR.ref();
+      const sheet = resolveSheetName(node.sheet ?? null, state.context);
+      if (sheet === undefined) return ERR.ref();
+      // A token that looks like a reference but is not a valid A1 address
+      // (`A0`, `AAAA1`) must fail loudly; returning an empty value here used to
+      // make `=A0+1` silently evaluate to 1.
+      if (!parseAddress(node.address)) return ERR.ref();
       return state.context.getValue(sheet, node.address);
     }
     case "range":

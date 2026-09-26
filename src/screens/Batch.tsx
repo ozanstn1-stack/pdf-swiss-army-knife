@@ -7,7 +7,7 @@ import { useT } from "../lib/i18n";
 import { useTool } from "../lib/useTool";
 import { cancelJob, compressPdf, ocrPdf, pdfToImages, protectPdf, rotatePages, watermarkPdf } from "../lib/api";
 import { fileBaseName, formatBytes, joinPath } from "../lib/format";
-import { useSettings } from "../lib/store";
+import { errorMessage, useSettings } from "../lib/store";
 
 type Operation = "compress" | "watermark" | "ocr" | "protect" | "rotate" | "images";
 
@@ -71,7 +71,7 @@ export function Batch({ initialFiles, dragging }: { initialFiles?: string[]; dra
           ),
         );
       } catch (error) {
-        const message = (error as { message?: string })?.message ?? String(error);
+        const message = errorMessage(error, t);
         const cancelled = (error as { code?: string })?.code === "cancelled";
         setQueue((previous) =>
           previous.map((entry, i) =>

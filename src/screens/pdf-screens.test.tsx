@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.fn(async (command: string) => {
   switch (command) {
     case "app_info":
-      return { version: "2.1.0", name: "test" };
+      return { version: "2.2.0", name: "test" };
     case "engine_status":
       return { pdfium: true, qpdf: true, tesseract: true };
     case "load_settings":

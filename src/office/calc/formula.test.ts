@@ -220,6 +220,58 @@ describe("evaluateFormula", () => {
   });
 });
 
+describe("reference forms", () => {
+  const ctx = context(
+    { A1: 5, A2: 9, B1: 7, "Sheet1!A1": 5, "My Sheet!A1": 11, "My Sheet!A2": 13 },
+    ["Sheet1", "My Sheet"],
+  );
+
+  it("treats absolute, relative and mixed anchors as the same cell", () => {
+    expect(evaluateFormula("=$A$1", ctx)).toBe(5);
+    expect(evaluateFormula("=A$1", ctx)).toBe(5);
+    expect(evaluateFormula("=$A1", ctx)).toBe(5);
+    expect(evaluateFormula("=A1", ctx)).toBe(5);
+  });
+
+  it("reads ranges with absolute and mixed anchors", () => {
+    expect(evaluateFormula("=SUM($A$1:$A$2)", ctx)).toBe(14);
+    expect(evaluateFormula("=SUM(A$1:A$2)", ctx)).toBe(14);
+    expect(evaluateFormula("=SUM($A1:$A2)", ctx)).toBe(14);
+    expect(evaluateFormula("=SUM(A1:B1)", ctx)).toBe(12);
+  });
+
+  it("reads cross-sheet references, quoted or bare", () => {
+    expect(evaluateFormula("=Sheet1!A1", ctx)).toBe(5);
+    expect(evaluateFormula("='My Sheet'!A1", ctx)).toBe(11);
+    expect(evaluateFormula("=SUM('My Sheet'!A1:A2)", ctx)).toBe(24);
+  });
+
+  it("reports an unknown quoted sheet as #REF!, not as a name", () => {
+    const result = evaluateFormula("='Nope Sheet'!A1", ctx);
+    expect(isError(result)).toBe(true);
+    expect((result as { code: string }).code).toBe("#REF!");
+  });
+
+  it("is case-insensitive like Excel for references and sheet names", () => {
+    expect(evaluateFormula("=a1", ctx)).toBe(5);
+    expect(evaluateFormula("=sum(a1:a2)", ctx)).toBe(14);
+    expect(evaluateFormula("=sheet1!a1", ctx)).toBe(5);
+  });
+
+  it("rejects a malformed reference instead of reading a neighbour", () => {
+    for (const formula of ["=A0+1", "=SUM(A0:A3)"]) {
+      const result = evaluateFormula(formula, ctx);
+      expect(isError(result), `${formula} should be an error`).toBe(true);
+      expect((result as { code: string }).code).toBe("#REF!");
+    }
+    // Four letters is not a cell reference at all, so it reads as a name -
+    // which is exactly what Excel does with `=AAAA1`.
+    const longName = evaluateFormula("=AAAA1+1", ctx);
+    expect(isError(longName)).toBe(true);
+    expect((longName as { code: string }).code).toBe("#NAME?");
+  });
+});
+
 describe("error handling contract", () => {
   it("IFERROR still catches an error argument", () => {
     const ctx = context({ A1: ERR.value() });

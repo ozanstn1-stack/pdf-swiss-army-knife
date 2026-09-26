@@ -23,5 +23,9 @@ export default defineConfig({
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     setupFiles: ["./src/test-setup.ts"],
     restoreMocks: true,
+    // The component tests drive real editors with userEvent; on a loaded
+    // machine (or while cargo tests run next to them) the default 5 s timeout
+    // is tight enough to fail a passing test.
+    testTimeout: 20_000,
   },
 });

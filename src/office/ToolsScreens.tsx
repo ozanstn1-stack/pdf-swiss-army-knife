@@ -27,7 +27,7 @@ import {
   FileImage,
 } from "lucide-react";
 import { useT } from "../lib/i18n";
-import { reportError, useToasts } from "../lib/store";
+import { errorMessage, reportError, useToasts } from "../lib/store";
 import { uid } from "../lib/office-types";
 import { useDataSheets, useDraw, useNotes, useOfficeTabs, usePlanner, type DrawDocument } from "../lib/office-store";
 import * as api from "../lib/office-api";
@@ -791,7 +791,7 @@ export function ConverterScreen() {
         const info = await api.convertFile(input, output);
         converted.push({ input, output: info.output, ok: true, detail: info.warnings.join(" ") });
       } catch (error) {
-        converted.push({ input, output: directory, ok: false, detail: error instanceof Error ? error.message : String(error) });
+        converted.push({ input, output: directory, ok: false, detail: errorMessage(error, t) });
       }
     }
     setResults(converted);
