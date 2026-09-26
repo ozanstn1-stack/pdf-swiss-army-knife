@@ -189,7 +189,9 @@ export const logFrontend = (level: string, message: string) =>
   invoke<void>("log_frontend", { level, message }).catch(() => undefined);
 
 export const devLaunchContext = () =>
-  invoke<{ startScreen: string | null; files: string[] | null; autoRun: boolean; tab: string | null }>("dev_launch_context");
+  invoke<{ startScreen: string | null; newTab: string | null; files: string[] | null; autoRun: boolean; tab: string | null }>("dev_launch_context");
+
+export const startupFiles = () => invoke<string[]>("office_startup_files");
 
 // ---------------------------------------------------------------------------
 // Operations

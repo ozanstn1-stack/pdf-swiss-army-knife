@@ -15,7 +15,9 @@ import {
   Copy,
   Eraser,
   Filter,
+  FolderOpen,
   Grid3x3,
+  Printer,
   Italic,
   Merge,
   Minus,
@@ -47,7 +49,7 @@ import {
   type Scalar,
 } from "./calc/formula";
 import { Dialog, Ribbon, RibbonGroup, ToolButton, ToolColor, ToolSelect } from "./office-ui";
-import { useOfficeSession } from "./useOfficeSession";
+import { openIntoWorkspace, useEditorShortcuts, useOfficeSession } from "./useOfficeSession";
 
 type CalcTab = OfficeTab & { model: Workbook };
 
@@ -84,10 +86,15 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   const [redoStack, setRedoStack] = useState<Workbook[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const cellInputRef = useRef<HTMLInputElement>(null);
 
   const sheet = workbook.sheets[Math.min(sheetIndex, workbook.sheets.length - 1)] ?? workbook.sheets[0];
   const activeCell = sheet.cells[formatAddress(selection.focus.row, selection.focus.col)];
   const computed = useMemo(() => computeSheetValues(workbook, sheet), [workbook, sheet]);
+
+  useEditorShortcuts(session);
+
+  useEditorShortcuts(session);
 
   const update = useCallback(
     (mutate: (workbook: Workbook) => Workbook, recordUndo = true) => {
@@ -124,6 +131,21 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   useEffect(() => {
     setFormulaDraft(activeCell?.formula ?? cellText(activeCell));
   }, [selection.focus.row, selection.focus.col, activeCell]);
+
+  // Focus the inline editor as soon as it opens and put the caret at the end,
+  // so fast typing never loses characters.
+  useEffect(() => {
+    if (!editing) return;
+    const input = cellInputRef.current;
+    if (!input) return;
+    input.focus();
+    const end = input.value.length;
+    try {
+      input.setSelectionRange(end, end);
+    } catch {
+      // setSelectionRange is not supported for every input type.
+    }
+  }, [editing]);
 
   // -------------------------------------------------------------------------
   // Cell helpers
@@ -257,6 +279,8 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   // -------------------------------------------------------------------------
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // Keys typed inside the inline editor belong to the editor only.
+    if ((event.target as HTMLElement).closest("input, textarea, [contenteditable=true]")) return;
     const { row, col } = selection.focus;
     const move = (dRow: number, dCol: number, extend = false) => {
       event.preventDefault();
@@ -322,6 +346,7 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
         break;
       default:
         if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
+          event.preventDefault();
           setEditing({ row, col, value: event.key });
         }
     }
@@ -649,7 +674,10 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
 
         <div className="ribbon-spacer" />
         <RibbonGroup>
+          <ToolButton icon={<FolderOpen size={16} />} label={t("common.open")} onClick={() => void openIntoWorkspace()} />
           <ToolButton icon={<Save size={16} />} label={t("common.save")} onClick={() => void session.save()} disabled={session.busy} />
+          <ToolButton label={t("common.saveAs")} onClick={() => void session.saveAs()} disabled={session.busy} />
+          <ToolButton icon={<Printer size={16} />} label={t("common.print")} onClick={() => window.print()} />
         </RibbonGroup>
       </Ribbon>
 
@@ -685,6 +713,7 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
           className="calc-grid"
           tabIndex={0}
           ref={gridRef}
+          onMouseDown={() => gridRef.current?.focus()}
           onKeyDown={handleKeyDown}
           onScroll={(event) => setScroll((current) => ({ ...current, top: (event.target as HTMLDivElement).scrollTop, left: (event.target as HTMLDivElement).scrollLeft }))}
           style={{ width: "100%", height: "100%" }}
@@ -756,6 +785,7 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
                         justifyContent: style.align === "center" ? "center" : style.align === "right" || (style.align === "general" && typeof value === "number") ? "flex-end" : "flex-start",
                       }}
                       onMouseDown={(event) => {
+                        gridRef.current?.focus();
                         if (event.shiftKey) setSelection({ anchor: selection.anchor, focus: { row, col } });
                         else setSelection({ anchor: { row, col }, focus: { row, col } });
                       }}
@@ -764,6 +794,7 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
                       {isEditing ? (
                         <input
                           className="cell-editor"
+                          ref={cellInputRef}
                           value={editing!.value}
                           autoFocus
                           onChange={(event) => setEditing({ row, col, value: event.target.value })}
@@ -774,7 +805,10 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
                               event.preventDefault();
                               commitEdit("right");
                             }
-                            if (event.key === "Escape") setEditing(null);
+                            if (event.key === "Escape") {
+                              setEditing(null);
+                              window.setTimeout(() => gridRef.current?.focus(), 0);
+                            }
                           }}
                         />
                       ) : (

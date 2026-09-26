@@ -461,3 +461,47 @@ export const useDraw = create<DrawState>((set, get) => ({
     void api.storeSave(DRAW_KEY, documents).catch(() => undefined);
   },
 }));
+
+// ---------------------------------------------------------------------------
+// Opening files into the workspace (shared by Home, the launcher, toolbars,
+// drag & drop, file associations and the command line)
+// ---------------------------------------------------------------------------
+
+export const OFFICE_EXTENSIONS = ["docx", "docm", "dotx", "odt", "rtf", "txt", "md", "markdown", "html", "htm", "xlsx", "xlsm", "xls", "ods", "csv", "tsv", "pptx", "pptm", "odp", "oswk"];
+
+export function isOfficePath(path: string): boolean {
+  const extension = (path.split(".").pop() ?? "").toLowerCase();
+  return OFFICE_EXTENSIONS.includes(extension);
+}
+
+export function isSpreadsheetPath(path: string): boolean {
+  return ["xlsx", "xlsm", "xls", "ods", "csv", "tsv"].includes((path.split(".").pop() ?? "").toLowerCase());
+}
+
+export function isPresentationPath(path: string): boolean {
+  return ["pptx", "pptm", "odp"].includes((path.split(".").pop() ?? "").toLowerCase());
+}
+
+export interface OpenPathResult {
+  ok: boolean;
+  kind?: OfficeKind;
+  error?: string;
+}
+
+/** Opens a document file and adds it as an editor tab. */
+export async function openOfficePath(path: string): Promise<OpenPathResult> {
+  try {
+    const result = await api.openDocument(path);
+    useOfficeTabs.getState().open({
+      kind: result.kind,
+      title: result.title || path.split(/[\\/]/).pop() || "Document",
+      path: result.path,
+      model: result.model as OfficeModel,
+      warnings: result.warnings,
+    });
+    return { ok: true, kind: result.kind };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : typeof error === "object" && error && "message" in error ? String((error as { message: unknown }).message) : String(error);
+    return { ok: false, error: message };
+  }
+}

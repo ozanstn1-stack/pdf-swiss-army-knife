@@ -324,9 +324,40 @@ fn write_run_properties(writer: &mut XmlWriter, run: &Run) {
 }
 
 fn write_text_run(writer: &mut XmlWriter, run: &Run) {
+    // `{{page}}` / `{{pages}}` become real PAGE/NUMPAGES fields so Word and
+    // LibreOffice keep them up to date instead of showing a static number.
+    if run.text.contains("{{page}}") || run.text.contains("{{pages}}") {
+        let mut remaining = run.text.as_str();
+        while !remaining.is_empty() {
+            let next_page = remaining.find("{{page}}");
+            let next_pages = remaining.find("{{pages}}");
+            let (index, token) = match (next_page, next_pages) {
+                (Some(a), Some(b)) => if a < b { (a, "{{page}}") } else { (b, "{{pages}}") },
+                (Some(a), None) => (a, "{{page}}"),
+                (None, Some(b)) => (b, "{{pages}}"),
+                (None, None) => {
+                    write_plain_run(writer, run, remaining);
+                    break;
+                }
+            };
+            if index > 0 {
+                write_plain_run(writer, run, &remaining[..index]);
+            }
+            write_field_run(writer, run, token == "{{pages}}");
+            remaining = &remaining[index + token.len()..];
+        }
+        return;
+    }
+    write_plain_run(writer, run, &run.text);
+}
+
+fn write_plain_run(writer: &mut XmlWriter, run: &Run, text: &str) {
+    if text.is_empty() {
+        return;
+    }
     writer.raw("<w:r>");
     write_run_properties(writer, run);
-    let mut parts = run.text.split('\n').peekable();
+    let mut parts = text.split('\n').peekable();
     while let Some(part) = parts.next() {
         writer.raw("<w:t xml:space=\"preserve\">");
         writer.text(part);
@@ -336,6 +367,23 @@ fn write_text_run(writer: &mut XmlWriter, run: &Run) {
         }
     }
     writer.raw("</w:r>");
+}
+
+fn write_field_run(writer: &mut XmlWriter, run: &Run, total_pages: bool) {
+    let instruction = if total_pages { "NUMPAGES" } else { "PAGE" };
+    for (payload, is_field) in [
+        ("<w:fldChar w:fldCharType=\"begin\"/>".to_string(), false),
+        (format!("<w:instrText xml:space=\"preserve\"> {instruction} </w:instrText>"), false),
+        ("<w:fldChar w:fldCharType=\"separate\"/>".to_string(), false),
+        ("<w:t>1</w:t>".to_string(), true),
+        ("<w:fldChar w:fldCharType=\"end\"/>".to_string(), false),
+    ] {
+        writer.raw("<w:r>");
+        write_run_properties(writer, run);
+        writer.raw(&payload);
+        writer.raw("</w:r>");
+        let _ = is_field;
+    }
 }
 
 fn write_paragraph(writer: &mut XmlWriter, props: &ParaProps, runs: &[Run], rels: &mut Relationships) {
@@ -508,7 +556,6 @@ fn write_footer(blocks: &[Block], rels: &mut Relationships, media: &mut Media, i
     let mut writer = XmlWriter::new();
     writer.declaration();
     writer.raw(&format!("<w:ftr {NS_DECL}>"));
-    writer.raw("<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>");
     for block in blocks {
         write_block(&mut writer, block, rels, media, id_counter, 0);
     }
@@ -772,6 +819,8 @@ struct RelLink {
 struct PartContext {
     rels: HashMap<String, RelLink>,
     warnings: Vec<String>,
+    /// True while the cached result of a PAGE/NUMPAGES field is being skipped.
+    field_skip: bool,
 }
 
 fn read_relationships(reader: &ZipReader, part: &str) -> HashMap<String, RelLink> {
@@ -1031,6 +1080,9 @@ fn read_runs(node: &XmlNode, context: &mut PartContext, reader: &ZipReader, runs
                 for part in &child.children {
                     match part.local_name() {
                         "t" => {
+                            if context.field_skip {
+                                continue;
+                            }
                             run.text.push_str(&part.deep_text());
                             has_text = true;
                         }
@@ -1063,9 +1115,22 @@ fn read_runs(node: &XmlNode, context: &mut PartContext, reader: &ZipReader, runs
                             }
                         }
                         "instrText" => {
-                            context.warnings.push("Fields (other than page numbers) are imported as plain text.".into());
+                            let instruction = part.deep_text().to_uppercase();
+                            if instruction.contains("NUMPAGES") {
+                                runs.push(Run { text: "{{pages}}".into(), ..run.clone() });
+                                context.field_skip = true;
+                            } else if instruction.contains("PAGE") {
+                                runs.push(Run { text: "{{page}}".into(), ..run.clone() });
+                                context.field_skip = true;
+                            } else {
+                                context.warnings.push("Fields (other than page numbers) are imported as plain text.".into());
+                            }
                         }
-                        "fldChar" => {}
+                        "fldChar" => {
+                            if part.attr_any_ns("fldCharType") == Some("end") {
+                                context.field_skip = false;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1093,6 +1158,15 @@ fn read_runs(node: &XmlNode, context: &mut PartContext, reader: &ZipReader, runs
                 context.warnings.push("Comments and notes are not imported.".into());
             }
             "fldSimple" => {
+                let instruction = child.attr_any_ns("instr").unwrap_or_default().to_uppercase();
+                if instruction.contains("NUMPAGES") {
+                    runs.push(Run { text: "{{pages}}".into(), ..Default::default() });
+                    continue;
+                }
+                if instruction.contains("PAGE") {
+                    runs.push(Run { text: "{{page}}".into(), ..Default::default() });
+                    continue;
+                }
                 context.warnings.push("Fields (other than page numbers) are imported as plain text.".into());
                 let mut inner_runs = Vec::new();
                 read_runs(child, context, reader, &mut inner_runs, blocks, first_break);
@@ -1289,7 +1363,7 @@ fn read_part_blocks(reader: &ZipReader, part: &str, document: &mut TextDocument,
     let Ok(root) = parse_xml(&text) else {
         return Vec::new();
     };
-    let mut context = PartContext { rels: read_relationships(reader, part), warnings: Vec::new() };
+    let mut context = PartContext { rels: read_relationships(reader, part), warnings: Vec::new(), field_skip: false };
     let mut blocks = Vec::new();
     let container = root.child("body").unwrap_or(&root);
     for child in &container.children {

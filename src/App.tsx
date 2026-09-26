@@ -10,6 +10,7 @@ import {
   FolderClock,
   FileImage,
   FilePlus2,
+  FolderOpen,
   FileSpreadsheet,
   FileText,
   Presentation,
@@ -43,7 +44,7 @@ import {
 import { useT } from "./lib/i18n";
 import { useDev, useDrop, useJobs, useRecent, useSettings, useToasts } from "./lib/store";
 import packageJson from "../package.json";
-import { devLaunchContext } from "./lib/api";
+import { devLaunchContext, startupFiles } from "./lib/api";
 import type { Navigate, ScreenId } from "./lib/nav";
 import { Home as HomeScreen } from "./screens/Home";
 import { Reader } from "./screens/Reader";
@@ -68,8 +69,9 @@ import { OverwriteDialog, PasswordDialog, Toasts } from "./components/files";
 import { Badge, IconButton } from "./components/ui";
 import { isAndroid, pickAndroidFiles } from "./lib/mobile";
 import { OfficeWorkspace } from "./office/OfficeWorkspace";
+import { openIntoWorkspace } from "./office/useOfficeSession";
 import { CleanerScreen, ConverterScreen, DataScreen, DrawScreen, NotesScreen, PdfFormsScreen, PlannerScreen, TemplatesScreen } from "./office/ToolsScreens";
-import { useOfficeTabs } from "./lib/office-store";
+import { isOfficePath, openOfficePath, useOfficeTabs } from "./lib/office-store";
 import * as officeApi from "./lib/office-api";
 
 type PageToolTab = "extract" | "delete" | "rotate" | "resize" | "crop" | "numbering";
@@ -138,6 +140,7 @@ export default function App() {
       .then((context) => {
         useDev.getState().set({
           startScreen: context.startScreen,
+          newTab: context.newTab,
           files: context.files,
           autoRun: Boolean(context.autoRun),
           tab: context.tab,
@@ -240,6 +243,30 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [screen]);
+
+  // Files handed to the process (Windows file association, "open with").
+  useEffect(() => {
+    let cancelled = false;
+    void startupFiles()
+      .then((paths) => {
+        if (cancelled || paths.length === 0) return;
+        const officePaths = paths.filter((path) => isOfficePath(path));
+        if (officePaths.length > 0) {
+          setScreen("office");
+          for (const path of officePaths) void openOfficePath(path);
+        }
+        const pdfPaths = paths.filter((path) => path.toLowerCase().endsWith(".pdf"));
+        if (pdfPaths.length > 0 && officePaths.length === 0) {
+          setFiles(pdfPaths);
+          setScreen("reader");
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const homeDrop = useCallback((paths: string[]) => {
     setFiles(paths);
@@ -562,6 +589,16 @@ function OfficeLauncher({ kind, onOpen }: OfficeLauncherProps) {
           <h1>{t(kind === "writer" ? "nav.documents" : kind === "calc" ? "nav.spreadsheets" : "nav.presentations")}</h1>
           <p className="muted">{t("office.noTabsHint")}</p>
         </div>
+          <button
+            type="button"
+            className="btn btn-soft"
+            onClick={async () => {
+              const opened = await openIntoWorkspace();
+              if (opened) onOpen();
+            }}
+          >
+            <FolderOpen size={16} /> {t("common.open")}
+          </button>
         <button
           type="button"
           className="btn btn-primary"
@@ -570,7 +607,7 @@ function OfficeLauncher({ kind, onOpen }: OfficeLauncherProps) {
             onOpen();
           }}
         >
-          <FilePlus2 size={16} /> {t("office.noTabs")}
+          <FilePlus2 size={16} /> {t(kind === "writer" ? "office.newDocument" : kind === "calc" ? "office.newSpreadsheet" : "office.newPresentation")}
         </button>
       </div>
       <div className="card">

@@ -10,9 +10,12 @@ import {
   Braces,
   Circle,
   Copy,
+  FileDown,
   Group,
+  FolderOpen,
   Image as ImageIcon,
   LineChart,
+  Printer,
   Minus,
   MonitorPlay,
   Move,
@@ -35,7 +38,7 @@ import { useT } from "../lib/i18n";
 import { reportError } from "../lib/store";
 import { uid, type ShapeStyle } from "../lib/office-types";
 import { Ribbon, RibbonGroup, ToolButton, ToolColor, ToolNumber, ToolSelect } from "./office-ui";
-import { useOfficeSession } from "./useOfficeSession";
+import { openIntoWorkspace, useEditorShortcuts, useOfficeSession } from "./useOfficeSession";
 
 type ImpressTab = OfficeTab & { model: Deck };
 
@@ -127,6 +130,9 @@ export function ImpressEditor({ tab }: { tab: ImpressTab }) {
   const dragState = useRef<{ id: string; mode: "move" | "resize" | "rotate"; startX: number; startY: number; object: SlideObject } | null>(null);
 
   const slide = deck.slides[Math.min(slideIndex, deck.slides.length - 1)] ?? deck.slides[0];
+
+  useEditorShortcuts(session);
+  useEditorShortcuts(session);
   const theme = useMemo(() => THEMES.find((candidate) => candidate.id === deck.theme) ?? THEMES[0], [deck.theme]);
   const scale = useMemo(() => {
     const width = canvasRef.current?.clientWidth ?? 800;
@@ -461,7 +467,11 @@ export function ImpressEditor({ tab }: { tab: ImpressTab }) {
 
         <div className="ribbon-spacer" />
         <RibbonGroup>
+          <ToolButton icon={<FolderOpen size={16} />} label={t("common.open")} onClick={() => void openIntoWorkspace()} />
           <ToolButton icon={<Save size={16} />} label={t("common.save")} onClick={() => void session.save()} disabled={session.busy} />
+          <ToolButton label={t("common.saveAs")} onClick={() => void session.saveAs()} disabled={session.busy} />
+          <ToolButton icon={<FileDown size={16} />} label={t("writer.exportPdf")} onClick={() => void session.exportPdf()} />
+          <ToolButton icon={<Printer size={16} />} label={t("common.print")} onClick={() => window.print()} />
         </RibbonGroup>
       </Ribbon>
 

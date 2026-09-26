@@ -6,7 +6,9 @@ param(
     [int]$WaitSeconds = 8,
     [double]$Scale = 0,
     [switch]$AutoRun,
-    [switch]$Maximize
+    [switch]$Maximize,
+    [string]$Exe = "D:\AI\projects\pdf-swiss-army-knife\target\release\pdf-swiss-army-knife.exe",
+    [string]$NewTab = ""
 )
 # Drives a UI flow for validation/screenshots: launches the app with the dev
 # hook, performs mouse/keyboard actions, then captures the window.
@@ -34,8 +36,9 @@ $env:PDFSAK_START_SCREEN = $Screen
 $env:PDFSAK_ALWAYS_ON_TOP = '1'
 if ($AutoRun) { $env:PDFSAK_DEV_RUN = '1' } else { Remove-Item Env:\PDFSAK_DEV_RUN -ErrorAction SilentlyContinue }
 if ($Files) { $env:PDFSAK_DEV_FILES = $Files } else { Remove-Item Env:\PDFSAK_DEV_FILES -ErrorAction SilentlyContinue }
+if ($NewTab) { $env:PDFSAK_DEV_NEW = $NewTab } else { Remove-Item Env:\PDFSAK_DEV_NEW -ErrorAction SilentlyContinue }
 
-$exe = "D:\AI\projects\pdf-swiss-army-knife\target\release\pdf-swiss-army-knife.exe"
+$exe = $Exe
 $proc = Start-Process -FilePath $exe -WorkingDirectory "D:\AI\projects\pdf-swiss-army-knife\target\release" -PassThru
 
 $handle = [IntPtr]::Zero

@@ -1217,6 +1217,7 @@ pub fn file_sizes(paths: Vec<String>) -> Vec<Option<u64>> {
 pub fn dev_launch_context() -> serde_json::Value {
     serde_json::json!({
         "startScreen": std::env::var("PDFSAK_START_SCREEN").ok(),
+        "newTab": std::env::var("PDFSAK_DEV_NEW").ok(),
         "autoRun": std::env::var("PDFSAK_DEV_RUN").is_ok(),
         "tab": std::env::var("PDFSAK_DEV_TAB").ok(),
         "files": std::env::var("PDFSAK_DEV_FILES").ok().map(|value| {

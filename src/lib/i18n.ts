@@ -4,7 +4,7 @@ import { useSettings } from "./store";
 type Dict = Record<string, string>;
 
 const en: Dict = {
-  "app.name": "PDF Swiss Army Knife",
+  "app.name": "Office Swiss Army Knife",
   "app.tagline": "All your PDF tools in one place.",
 
   "nav.home": "Home",

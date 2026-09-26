@@ -174,18 +174,20 @@ export const useDrop = create<DropState>((set) => ({
 
 interface DevState {
   startScreen: string | null;
+  newTab: string | null;
   files: string[] | null;
   autoRun: boolean;
   tab: string | null;
-  set: (context: { startScreen: string | null; files: string[] | null; autoRun: boolean; tab?: string | null }) => void;
+  set: (context: { startScreen: string | null; newTab?: string | null; files: string[] | null; autoRun: boolean; tab?: string | null }) => void;
 }
 
 export const useDev = create<DevState>((set) => ({
   startScreen: null,
+  newTab: null,
   files: null,
   autoRun: false,
   tab: null,
-  set: (context) => set({ ...context, tab: context.tab ?? null }),
+  set: (context) => set({ ...context, newTab: context.newTab ?? null, tab: context.tab ?? null }),
 }));
 
 // ---------------------------------------------------------------------------

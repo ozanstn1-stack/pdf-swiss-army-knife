@@ -2,10 +2,10 @@
  * Shared save/open/export/version-history logic for the office editors.
  * Keeps the editors focused on editing while this hook deals with files.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { OfficeKind } from "../lib/office-types";
-import { useOfficeTabs, type OfficeTab } from "../lib/office-store";
+import { openOfficePath, useOfficeTabs, type OfficeTab } from "../lib/office-store";
 import { useSettings, useToasts, reportError } from "../lib/store";
 import { useT } from "../lib/i18n";
 import * as api from "../lib/office-api";
@@ -152,4 +152,70 @@ export function useOfficeSession(tab: OfficeTab) {
   const autosaveInterval = useSettings((state) => state.settings).autosaveSeconds ?? 30;
 
   return { save, saveAs, exportPdf, busy, openRecentVersion, choosePath, openFile, autosaveInterval };
+}
+
+/**
+ * Standard office keyboard shortcuts (Ctrl+S / Ctrl+Shift+S / Ctrl+O / Ctrl+P,
+ * plus optional Ctrl+F / Ctrl+H). Uses capture phase so the editor wins over
+ * the global PDF shortcuts.
+ */
+export function useEditorShortcuts(
+  session: ReturnType<typeof useOfficeSession>,
+  handlers?: { onFind?: () => void; onReplace?: () => void },
+) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === "s") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        void (event.shiftKey ? session.saveAs() : session.save());
+        return;
+      }
+      if (key === "o") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        void openIntoWorkspace();
+        return;
+      }
+      if (key === "p") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        window.print();
+        return;
+      }
+      if (key === "f" && handlers?.onFind) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        handlers.onFind();
+        return;
+      }
+      if (key === "h" && handlers?.onReplace) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        handlers.onReplace();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [handlers?.onFind, handlers?.onReplace, session]);
+}
+
+/** Opens a file dialog and adds the chosen document as a workspace tab. */
+export async function openIntoWorkspace(): Promise<string | null> {
+  const selection = await openDialog({
+    multiple: false,
+    filters: [
+      { name: "Documents", extensions: ["docx", "odt", "rtf", "txt", "md", "html", "xlsx", "ods", "csv", "pptx", "odp", "oswk"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+  if (typeof selection !== "string") return null;
+  const result = await openOfficePath(selection);
+  if (!result.ok) {
+    useToasts.getState().push({ kind: "error", title: "Unable to open this document.", detail: result.error });
+    return null;
+  }
+  return selection;
 }

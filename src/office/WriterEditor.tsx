@@ -17,6 +17,7 @@ import {
   Bold,
   Eraser,
   FileDown,
+  FolderOpen,
   FileText,
   Highlighter,
   Image as ImageIcon,
@@ -48,7 +49,7 @@ import { useT } from "../lib/i18n";
 import { uid, wordCount, type Block, type DocComment, type ImageData, type ParaProps, type Run, type TableData } from "../lib/office-types";
 import { defaultPageSetup, defaultParaProps, emptyMetadata, newParaBlock, newTextDocument } from "../lib/office-types";
 import { Dialog, Ribbon, RibbonGroup, ToolButton, ToolColor, ToolNumber, ToolSelect, useTablePicker } from "./office-ui";
-import { useOfficeSession } from "./useOfficeSession";
+import { openIntoWorkspace, useEditorShortcuts, useOfficeSession } from "./useOfficeSession";
 
 type WriterTab = OfficeTab & { model: TextDocument };
 
@@ -81,6 +82,22 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
 
   const document = tab.model;
   const stats = useMemo(() => wordCount(document), [document]);
+
+  useEditorShortcuts(session, { onFind: () => setFindOpen(true), onReplace: () => setFindOpen(true) });
+
+
+  // Ctrl+Enter inserts a real page break at the caret.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        insertPageBreak();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [document]);
 
   const update = useCallback((mutate: (document: TextDocument) => TextDocument) => edit(tab.id, (model) => mutate(model as TextDocument)), [edit, tab.id]);
 
@@ -484,6 +501,38 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
   const activeStyle = selection?.paragraph.style ?? "Normal";
   const activeRun = selection?.run;
 
+  /**
+   * Word behaviour: clicking anywhere in the page (including the empty area
+   * below the text) places the caret in the nearest paragraph.
+   */
+  const handlePageMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('[contenteditable="true"]')) return;
+    const container = event.currentTarget;
+    const candidates = Array.from(container.querySelectorAll<HTMLElement>(".para"));
+    if (candidates.length === 0) return;
+    event.preventDefault();
+    const scope = event.currentTarget.dataset.scope ?? "body";
+    const pool = candidates.filter((element) => (element.dataset.scope ?? "body") === scope);
+    const usable = pool.length > 0 ? pool : candidates;
+    const editable = usable.reduce(
+      (best, element) => {
+        const rect = element.getBoundingClientRect();
+        const distance = Math.abs(rect.top + rect.height / 2 - event.clientY);
+        return distance < best.distance ? { element, distance } : best;
+      },
+      { element: usable[0], distance: Number.POSITIVE_INFINITY },
+    ).element;
+    editable.focus();
+    const selection = window.getSelection();
+    if (selection) {
+      const range = window.document.createRange();
+      range.selectNodeContents(editable);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  };
   const handlePrint = () => {
     window.print();
   };
@@ -681,7 +730,10 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
 
         <div className="ribbon-spacer" />
         <RibbonGroup>
+          <ToolButton icon={<FolderOpen size={16} />} label={t("common.open")} onClick={() => void openIntoWorkspace()} />
           <ToolButton icon={<Save size={16} />} label={t("common.save")} onClick={() => void session.save()} disabled={session.busy} />
+          <ToolButton label={t("common.saveAs")} onClick={() => void session.saveAs()} disabled={session.busy} />
+          <ToolButton icon={<FileDown size={16} />} label={t("writer.exportPdf")} onClick={handleExportPdf} />
         </RibbonGroup>
       </Ribbon>
 
@@ -699,7 +751,7 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
       </div>
 
       <div className="editor-scroll">
-        <div className="writer-page" ref={bodyRef} style={{ width: pageWidth, minHeight: pageHeight, padding: `${marginTop}px ${marginX}px` }}>
+        <div className="writer-page" ref={bodyRef} data-scope={editingHeader ?? "body"} onMouseDown={handlePageMouseDown} style={{ width: pageWidth, minHeight: pageHeight, padding: `${marginTop}px ${marginX}px` }}>
           {editingHeader ? (
             <div className="writer-header-zone">{renderBlocks(editingHeader === "header" ? document.header : document.footer, editingHeader)}</div>
           ) : (

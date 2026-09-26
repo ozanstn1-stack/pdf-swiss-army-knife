@@ -2,11 +2,11 @@
  * Office workspace: a tab bar over the Writer/Calc/Impress editors with
  * shared autosave, crash recovery and version-history affordances.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FilePlus2, FileSpreadsheet, FileText, Presentation, RotateCcw, X } from "lucide-react";
-import { useRecovery, useOfficeTabs } from "../lib/office-store";
+import { isOfficePath, openOfficePath, useRecovery, useOfficeTabs } from "../lib/office-store";
 import type { OfficeKind } from "../lib/office-types";
-import { useSettings, useToasts } from "../lib/store";
+import { useDev, useSettings, useToasts } from "../lib/store";
 import { useT } from "../lib/i18n";
 import { WriterEditor } from "./WriterEditor";
 import { CalcEditor } from "./CalcEditor";
@@ -19,7 +19,36 @@ export function OfficeWorkspace() {
   const { create, activate, close } = useOfficeTabs();
   const settings = useSettings((state) => state.settings);
   const recovery = useRecovery();
+  const dev = useDev();
+  const bootstrapped = useRef(false);
   const [recovered, setRecovered] = useState<Array<{ documentId: string; kind: string; title: string }>>([]);
+
+  // Automation hook (screenshots/tests) and external open requests.
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    const requestedFiles = (dev.files ?? []).filter((path) => isOfficePath(path));
+    if (dev.newTab === "writer" || dev.newTab === "calc" || dev.newTab === "impress") {
+      bootstrapped.current = true;
+      create(dev.newTab);
+      for (const path of requestedFiles) void openOfficePath(path);
+      return;
+    }
+    if (requestedFiles.length > 0) {
+      bootstrapped.current = true;
+      void (async () => {
+        for (const path of requestedFiles) await openOfficePath(path);
+      })();
+    }
+  }, [create, dev.files, dev.newTab]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const path = (event as CustomEvent<string>).detail;
+      if (typeof path === "string" && path) void openOfficePath(path);
+    };
+    window.addEventListener("oswk-open-path", handler);
+    return () => window.removeEventListener("oswk-open-path", handler);
+  }, []);
 
   useEffect(() => {
     void recovery.refresh().then((records) => {
