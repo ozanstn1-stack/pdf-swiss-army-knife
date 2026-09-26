@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => null), sav
 vi.mock("@tauri-apps/plugin-fs", () => ({ readFile: vi.fn(async () => new Uint8Array()) }));
 
 import { CalcEditor } from "./CalcEditor";
+import { applyCellEdit } from "./calc/cells";
 import { useOfficeTabs, type OfficeTab } from "../lib/office-store";
 import { cellText, type Workbook } from "../lib/office-types";
 
@@ -162,6 +163,36 @@ describe("Calc keyboard entry is reliable without clicking between cells", () =>
     // A1 (50) matches, A2 (10) does not.
     expect(cells()[0].style.background).not.toBe("");
     expect(cells()[1].style.background).toBe("");
+  });
+
+  it("inserts a live pivot table and renders its grid", async () => {
+    const user = userEvent.setup();
+    const id = useOfficeTabs.getState().create("calc", "Untitled");
+    // Seed a small table directly: a header row plus two data rows.
+    const table = [
+      ["Department", "Year", "Sales"],
+      ["Hardware", "2025", "100"],
+      ["Hardware", "2025", "150"],
+    ];
+    let model = useOfficeTabs.getState().tabs[0].model as Workbook;
+    table.forEach((row, rowIndex) => row.forEach((value, colIndex) => {
+      model = applyCellEdit(model, 0, rowIndex, colIndex, value);
+    }));
+    useOfficeTabs.setState((state) => ({ tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, model } : tab)) }));
+    render(<Harness id={id} />);
+
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Pivot table" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Insert pivot" }));
+
+    const sheet = workbookOf().sheets[0];
+    expect(sheet.pivotTables).toHaveLength(1);
+    expect(sheet.pivotTables[0].sourceSheet).toBe(sheet.name);
+    const grid = document.querySelector(".pivot-grid");
+    expect(grid).not.toBeNull();
+    expect(grid!.textContent).toContain("Department");
+    expect(grid!.textContent).toContain("250");
   });
 
   it("commits a formula from the formula bar and continues on the grid", async () => {

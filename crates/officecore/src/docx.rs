@@ -205,6 +205,12 @@ fn write_paragraph_properties(writer: &mut XmlWriter, props: &ParaProps) {
     if !props.style.is_empty() && props.style != "Normal" {
         children.push(format!("<w:pStyle w:val=\"{}\"/>", crate::xml::escape_attr(&props.style)));
     }
+    if props.keep_with_next {
+        children.push("<w:keepNext/>".into());
+    }
+    if props.keep_together {
+        children.push("<w:keepLines/>".into());
+    }
     if props.page_break_before {
         children.push("<w:pageBreakBefore/>".into());
     }
@@ -534,6 +540,14 @@ fn write_block(writer: &mut XmlWriter, block: &Block, rels: &mut Relationships, 
         }
         Block::Rule => {
             writer.raw("<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\" w:sz=\"6\" w:space=\"1\" w:color=\"94A3B8\"/></w:pBdr></w:pPr></w:p>");
+        }
+        Block::Toc { entries } => {
+            // Static lines with the page numbers from the last update in the
+            // editor; Word will not refresh them, which the export warns about.
+            for entry in entries {
+                let (props, runs) = crate::layout::toc_entry_line(entry);
+                write_paragraph(writer, &props, &runs, rels);
+            }
         }
     }
 }

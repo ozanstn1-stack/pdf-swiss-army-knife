@@ -21,6 +21,7 @@ export {
   ERR,
   FormulaError,
   addressesInRange,
+  asScalar,
   columnIndex,
   columnLabel,
   compareScalars,
@@ -172,7 +173,7 @@ function tokenize(input: string): Token[] {
         tokens.push({ type: "bool", value: upper });
         continue;
       }
-      if (/^#(REF|VALUE|NAME|DIV\/0|N\/A|NUM|CIRC)[!?]$/i.test(upper)) {
+      if (/^#(REF|VALUE|NAME|DIV\/0|N\/A|NUM|CIRC|SPILL)[!?]$/i.test(upper)) {
         tokens.push({ type: "error", value: upper });
         continue;
       }
@@ -232,6 +233,43 @@ function readReference(input: string, index: number): { address: string; range: 
   // `A1`, so the address is normalised here rather than silently missing the
   // value map later.
   return { address: input.slice(index, end).replace(/\$/g, "").toUpperCase(), range, next: end };
+}
+
+/** Functions whose value can change without any cell being edited. */
+const VOLATILE_FUNCTIONS = new Set(["TODAY", "NOW", "RAND", "RANDBETWEEN", "OFFSET", "INDIRECT", "CELL", "INFO"]);
+
+/**
+ * The cells a formula reads, extracted without evaluating it.
+ *
+ * Used by the dependency graph so an edit only recalculates the formulas that
+ * can actually change. `null` means the reference set could not be read
+ * confidently; the caller treats such a formula as depending on everything.
+ */
+export interface FormulaReferenceSummary {
+  refs: Array<{ sheet: string | null; address: string }>;
+  ranges: Array<{ sheet: string | null; range: string }>;
+  names: string[];
+  volatile: boolean;
+}
+
+export function collectReferences(formula: string): FormulaReferenceSummary | null {
+  const tokens = tokenize(formula.trim().replace(/^=/, ""));
+  const summary: FormulaReferenceSummary = { refs: [], ranges: [], names: [], volatile: false };
+  for (const token of tokens) {
+    if (token.type === "ref") {
+      const address = parseAddress(token.value);
+      if (!address) return null;
+      summary.refs.push({ sheet: token.sheet ?? null, address: formatAddress(address.row, address.col) });
+    } else if (token.type === "range") {
+      if (!parseRange(token.value)) return null;
+      summary.ranges.push({ sheet: token.sheet ?? null, range: token.value.toUpperCase() });
+    } else if (token.type === "name") {
+      summary.names.push(token.value.toUpperCase());
+    } else if (token.type === "ident" && VOLATILE_FUNCTIONS.has(token.value)) {
+      summary.volatile = true;
+    }
+  }
+  return summary;
 }
 
 // ---------------------------------------------------------------------------
@@ -588,16 +626,21 @@ function evaluateNode(node: Node, state: EvalState): Scalar | CellMatrix {
   }
 }
 
-function evaluateBinary(node: Extract<Node, { type: "binary" }>, state: EvalState): Scalar {
-  const left = asScalar(evaluateNode(node.left, state));
+/**
+ * Applies one binary operator to one pair of scalars.
+ *
+ * Split out of `evaluateBinary` so array broadcasting can run the same rules
+ * cell by cell - `A1:A3>1` has to produce a column of booleans, which is what
+ * FILTER and the other dynamic-array functions expect.
+ */
+function applyBinary(op: string, left: Scalar, right: Scalar): Scalar {
   if (isError(left)) return left;
-  const right = asScalar(evaluateNode(node.right, state));
   if (isError(right)) return right;
 
-  if (node.op === "&") return toText(left) + toText(right);
-  if (["=", "<>", "<", ">", "<=", ">="].includes(node.op)) {
+  if (op === "&") return toText(left) + toText(right);
+  if (["=", "<>", "<", ">", "<=", ">="].includes(op)) {
     const comparison = compareScalars(left, right);
-    switch (node.op) {
+    switch (op) {
       case "=":
         return comparison === 0;
       case "<>":
@@ -617,7 +660,7 @@ function evaluateBinary(node: Extract<Node, { type: "binary" }>, state: EvalStat
   if (isError(a)) return a;
   const b = toNumber(right);
   if (isError(b)) return b;
-  switch (node.op) {
+  switch (op) {
     case "+":
       return a + b;
     case "-":
@@ -633,6 +676,32 @@ function evaluateBinary(node: Extract<Node, { type: "binary" }>, state: EvalStat
     default:
       return ERR.value();
   }
+}
+
+/** Element-wise operator over one or two matrices, padding to a common shape. */
+function broadcastBinary(op: string, left: CellMatrix, right: CellMatrix): CellMatrix {
+  const height = Math.max(left.length, right.length);
+  const width = Math.max(1, ...left.map((row) => row.length), ...right.map((row) => row.length));
+  const out: CellMatrix = [];
+  for (let row = 0; row < height; row += 1) {
+    const line: Scalar[] = [];
+    for (let col = 0; col < width; col += 1) {
+      line.push(applyBinary(op, left[row]?.[col] ?? "", right[row]?.[col] ?? ""));
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+function evaluateBinary(node: Extract<Node, { type: "binary" }>, state: EvalState): Scalar | CellMatrix {
+  const left = evaluateNode(node.left, state);
+  const right = evaluateNode(node.right, state);
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return broadcastBinary(node.op, Array.isArray(left) ? left : [[asScalar(left)]], Array.isArray(right) ? right : [[asScalar(right)]]);
+  }
+  const scalarLeft = asScalar(left);
+  const scalarRight = asScalar(right);
+  return applyBinary(node.op, scalarLeft, scalarRight);
 }
 
 /**
@@ -714,6 +783,16 @@ export function evaluateSource(source: string, context: FormulaContext): Scalar 
 export function evaluateFormula(formula: string, context: FormulaContext): Scalar {
   const source = formula.startsWith("=") ? formula.slice(1) : formula;
   return asScalar(evaluateSource(source, context));
+}
+
+/**
+ * The raw evaluation result: a scalar, or a matrix for the dynamic-array
+ * family. `evaluateFormula` keeps the scalar contract for existing callers;
+ * the dependency-aware value pass uses this one so a spill can be planned.
+ */
+export function evaluateFormulaResult(formula: string, context: FormulaContext): Scalar | CellMatrix {
+  const source = formula.startsWith("=") ? formula.slice(1) : formula;
+  return evaluateSource(source, context);
 }
 
 /** Evaluates a formula that may spill into a range. */

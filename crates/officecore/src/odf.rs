@@ -280,6 +280,16 @@ fn write_blocks(writer: &mut XmlWriter, blocks: &[Block], styles: &mut AutoStyle
             Block::Rule => {
                 writer.raw("<text:p>- - - - -</text:p>");
             }
+            Block::Toc { entries } => {
+                for entry in entries {
+                    let text = if entry.page > 0 {
+                        format!("{} .... {}", entry.text, entry.page)
+                    } else {
+                        entry.text.clone()
+                    };
+                    writer.raw(&format!("<text:p>{}</text:p>", crate::xml::escape_text(&text)));
+                }
+            }
         }
         index += 1;
     }

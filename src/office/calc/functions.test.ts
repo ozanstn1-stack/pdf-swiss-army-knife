@@ -874,3 +874,55 @@ describe("workbook integration", () => {
     expect(wb.sheets[0].cells.A1?.style.numberFormat).toBe("#,##0.00");
   });
 });
+
+describe("extended statistics and covariance", () => {
+  it("VAR.S, VAR.P, STDEV.S and STDEV.P agree with the sample/population split", () => {
+    expect(n("=VAR.S({1,2,3,4})")).toBeCloseTo(5 / 3, 10);
+    expect(n("=VAR.P({1,2,3,4})")).toBeCloseTo(1.25, 10);
+    expect(n("=VAR({1,2,3,4})")).toBeCloseTo(5 / 3, 10);
+    expect(n("=VARP({1,2,3,4})")).toBeCloseTo(1.25, 10);
+    expect(n("=STDEV.S({1,2,3,4})")).toBeCloseTo(Math.sqrt(5 / 3), 10);
+    expect(n("=STDEV.P({1,2,3,4})")).toBeCloseTo(Math.sqrt(1.25), 10);
+  });
+
+  it("VAR.S needs at least two values", () => {
+    expect(code("=VAR.S({5})")).toBe("#DIV/0!");
+  });
+
+  it("PERCENTILE interpolates between neighbours", () => {
+    expect(n("=PERCENTILE({1,2,3,4,5},0)")).toBe(1);
+    expect(n("=PERCENTILE({1,2,3,4,5},1)")).toBe(5);
+    expect(n("=PERCENTILE({1,2,3,4,5},0.5)")).toBe(3);
+    expect(n("=PERCENTILE({1,2,3,4,5},0.25)")).toBe(2);
+    expect(n("=PERCENTILE.INC({1,2,3,4,5},0.75)")).toBe(4);
+  });
+
+  it("PERCENTILE rejects k outside 0..1", () => {
+    expect(code("=PERCENTILE({1,2,3},1.5)")).toBe("#NUM!");
+  });
+
+  it("QUARTILE maps 0..4 onto the percentile scale", () => {
+    expect(n("=QUARTILE({1,2,3,4,5},0)")).toBe(1);
+    expect(n("=QUARTILE({1,2,3,4,5},2)")).toBe(3);
+    expect(n("=QUARTILE({1,2,3,4,5},4)")).toBe(5);
+    expect(n("=QUARTILE.INC({1,2,3,4,5},1)")).toBe(2);
+    expect(code("=QUARTILE({1,2,3},9)")).toBe("#NUM!");
+  });
+
+  it("CORREL is 1 for a perfectly linear pair and -1 for an inverse one", () => {
+    expect(n("=CORREL({1,2,3},{2,4,6})")).toBeCloseTo(1, 10);
+    expect(n("=CORREL({1,2,3},{6,4,2})")).toBeCloseTo(-1, 10);
+    expect(code("=CORREL({1},{2})")).toBe("#DIV/0!");
+  });
+
+  it("COVARIANCE.P and COVARIANCE.S differ by the divisor", () => {
+    expect(n("=COVARIANCE.P({1,2,3},{2,4,6})")).toBeCloseTo(2 / 3 * 2, 10);
+    expect(n("=COVARIANCE.S({1,2,3},{2,4,6})")).toBeCloseTo(2, 10);
+    expect(n("=COVAR({1,2,3},{2,4,6})")).toBe(n("=COVARIANCE.P({1,2,3},{2,4,6})"));
+  });
+
+  it("array comparisons broadcast, so FILTER can read a boolean range", () => {
+    const data = context({ A1: 1, A2: 5, A3: 2 });
+    expect(evaluateToMatrix("=FILTER(A1:A3,A1:A3>1)", data)).toEqual([[5], [2]]);
+  });
+});

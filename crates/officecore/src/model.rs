@@ -355,6 +355,11 @@ pub struct ParaProps {
     pub first_line_pt: f64,
     pub list: Option<ListInfo>,
     pub page_break_before: bool,
+    /// Pagination rules written to DOCX as `w:keepNext` / `w:keepLines`.
+    #[serde(default)]
+    pub keep_with_next: bool,
+    #[serde(default)]
+    pub keep_together: bool,
 }
 
 impl Default for ParaProps {
@@ -370,6 +375,8 @@ impl Default for ParaProps {
             first_line_pt: 0.0,
             list: None,
             page_break_before: false,
+            keep_with_next: false,
+            keep_together: false,
         }
     }
 }
@@ -442,6 +449,16 @@ impl TableData {
     }
 }
 
+/// One line of a table of contents.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TocEntry {
+    pub text: String,
+    pub level: u32,
+    pub page: u32,
+    pub anchor: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Block {
@@ -450,6 +467,9 @@ pub enum Block {
     Image { image: ImageData, width_pt: f64, height_pt: f64, align: String, caption: String },
     PageBreak,
     Rule,
+    /// A table of contents whose entries were last updated in the editor; the
+    /// layout and DOCX export render them as static text.
+    Toc { #[serde(default)] entries: Vec<TocEntry> },
 }
 
 impl Default for Block {
@@ -490,6 +510,7 @@ impl Block {
             Block::Image { caption, .. } => caption.clone(),
             Block::PageBreak => "\n".into(),
             Block::Rule => "".into(),
+            Block::Toc { entries } => entries.iter().map(|entry| entry.text.clone()).collect::<Vec<_>>().join("\n"),
         }
     }
 }
@@ -744,6 +765,41 @@ pub struct FilterState {
     pub values: Vec<String>,
 }
 
+/// One aggregated column of a pivot table.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PivotValueField {
+    pub field: String,
+    pub aggregation: String,
+}
+
+/// A filter on one pivot source field; an empty list keeps everything.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PivotFilter {
+    pub field: String,
+    pub values: Vec<String>,
+}
+
+/// A pivot table definition over a cell range whose first row is headers.
+///
+/// The definition is the source of truth in `.oswk`; XLSX export materialises
+/// the computed grid as plain values at `anchor` and reports that the result
+/// is not a live Excel pivot table.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PivotTable {
+    pub id: String,
+    pub name: String,
+    pub source_sheet: String,
+    pub source: String,
+    pub rows: Vec<String>,
+    pub columns: Vec<String>,
+    pub values: Vec<PivotValueField>,
+    pub filters: Vec<PivotFilter>,
+    pub anchor: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Sheet {
@@ -758,6 +814,7 @@ pub struct Sheet {
     pub freeze_rows: u32,
     pub freeze_cols: u32,
     pub charts: Vec<ChartPlacement>,
+    pub pivot_tables: Vec<PivotTable>,
     pub conditional: Vec<CondRule>,
     pub validations: Vec<Validation>,
     pub filter: Option<FilterState>,
@@ -783,6 +840,7 @@ impl Default for Sheet {
             freeze_rows: 0,
             freeze_cols: 0,
             charts: Vec::new(),
+            pivot_tables: Vec::new(),
             conditional: Vec::new(),
             validations: Vec::new(),
             filter: None,

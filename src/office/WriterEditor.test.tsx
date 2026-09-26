@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+﻿import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -115,6 +115,76 @@ describe("Writer structural editing stays in sync with the model", () => {
     expect(blockTexts()).toEqual(["HelloWorld"]);
   });
 
+  it("renders a real page container per page and counts them", async () => {
+    const user = userEvent.setup();
+    const id = useOfficeTabs.getState().create("writer", "Untitled");
+    const tab = useOfficeTabs.getState().tabs[0];
+    const model = tab.model as TextDocument;
+    const first = model.blocks.find((block) => block.type === "paragraph") as Extract<Block, { type: "paragraph" }>;
+    const blocks = [
+      ...model.blocks,
+      { type: "pageBreak" as const },
+      { type: "paragraph" as const, props: { ...first.props }, runs: [{ ...first.runs[0], text: "Page two" }] },
+      { type: "pageBreak" as const },
+      { type: "paragraph" as const, props: { ...first.props }, runs: [{ ...first.runs[0], text: "Page three" }] },
+    ];
+    useOfficeTabs.setState((state) => ({ tabs: state.tabs.map((entry) => (entry.id === id ? { ...entry, model: { ...model, blocks } } : entry)) }));
+    render(<Harness id={id} />);
+
+    const sheets = document.querySelectorAll(".writer-page-sheet");
+    expect(sheets.length).toBe(3);
+    expect(sheets[1].textContent).toContain("Page two");
+    expect(sheets[2].textContent).toContain("Page three");
+    expect(document.querySelector(".editor-status")?.textContent).toContain("3 pages");
+    // Clicking a fragment opens the continuous editor on that block.
+    await user.click(document.querySelectorAll(".writer-fragment")[1]);
+    expect(document.querySelectorAll(".writer-page-sheet").length).toBe(0);
+  });
+
+  it("inserts a table of contents from the headings", async () => {
+    const user = userEvent.setup();
+    const id = useOfficeTabs.getState().create("writer", "Untitled");
+    const tab = useOfficeTabs.getState().tabs[0];
+    const model = tab.model as TextDocument;
+    const first = model.blocks.find((block) => block.type === "paragraph") as Extract<Block, { type: "paragraph" }>;
+    const blocks = [
+      { type: "paragraph" as const, props: { ...first.props, style: "Heading1" }, runs: [{ ...first.runs[0], text: "Introduction" }] },
+      { type: "paragraph" as const, props: { ...first.props, style: "Heading2" }, runs: [{ ...first.runs[0], text: "Background" }] },
+      { type: "paragraph" as const, props: { ...first.props }, runs: [{ ...first.runs[0], text: "Body" }] },
+    ];
+    useOfficeTabs.setState((state) => ({ tabs: state.tabs.map((entry) => (entry.id === id ? { ...entry, model: { ...model, blocks } } : entry)) }));
+    render(<Harness id={id} />);
+
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert TOC" }));
+
+    const saved = useOfficeTabs.getState().tabs[0].model as TextDocument;
+    const toc = saved.blocks.find((block) => block.type === "toc");
+    expect(toc).toBeDefined();
+    if (toc?.type !== "toc") throw new Error("toc missing");
+    expect(toc.entries.map((entry) => entry.text)).toEqual(["Introduction", "Background"]);
+    expect(toc.entries.map((entry) => entry.level)).toEqual([1, 2]);
+    expect(document.querySelector(".writer-toc")?.textContent).toContain("Introduction");
+  });
+
+  it("lists the outline in the navigation pane", async () => {
+    const user = userEvent.setup();
+    const id = useOfficeTabs.getState().create("writer", "Untitled");
+    const tab = useOfficeTabs.getState().tabs[0];
+    const model = tab.model as TextDocument;
+    const first = model.blocks.find((block) => block.type === "paragraph") as Extract<Block, { type: "paragraph" }>;
+    const blocks = [
+      { type: "paragraph" as const, props: { ...first.props, style: "Heading1" }, runs: [{ ...first.runs[0], text: "Chapter one" }] },
+      { type: "paragraph" as const, props: { ...first.props }, runs: [{ ...first.runs[0], text: "Text" }] },
+    ];
+    useOfficeTabs.setState((state) => ({ tabs: state.tabs.map((entry) => (entry.id === id ? { ...entry, model: { ...model, blocks } } : entry)) }));
+    render(<Harness id={id} />);
+
+    await user.click(screen.getByRole("button", { name: "View" }));
+    await user.click(screen.getByRole("button", { name: "Navigation" }));
+    expect(document.querySelector(".writer-nav-pane")?.textContent).toContain("Chapter one");
+  });
+
   it("does not resurrect the split tail when typing continues fast", async () => {
     const user = userEvent.setup();
     const id = useOfficeTabs.getState().create("writer", "Untitled");
@@ -125,3 +195,5 @@ describe("Writer structural editing stays in sync with the model", () => {
     expect(blockTexts()).toEqual(["One", "Two", "Three"]);
   });
 });
+
+

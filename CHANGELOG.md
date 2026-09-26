@@ -4,6 +4,88 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0]
+
+A feature release on top of 2.2.0's stabilisation: Calc gets a dependency-driven
+engine, dynamic arrays and pivot tables; Writer gets a measured pagination
+engine with real page containers, a table of contents and a navigation pane.
+Detailed notes: [docs/release-notes-v2.5.0.md](docs/release-notes-v2.5.0.md).
+
+### Added
+
+- **Calc dependency graph and incremental recalculation.** An edit recalculates
+  the edited cell plus the formulas that (transitively) read it; unrelated
+  formulas keep their cached values. Volatile formulas (`NOW`, `RAND`, ...) and
+  ranges too large to expand into edges are treated as global dependents.
+  `lastComputeStats(workbook)` reports whether the last pass was full or
+  incremental and how many formulas it evaluated.
+- **Dynamic arrays with spill semantics.** A formula that returns a matrix
+  writes its extra cells into the grid (`=SEQUENCE(5)` spills down), blocked
+  spill ranges report `#SPILL!`, other formulas can read spilled cells, and a
+  resized array frees the cells it no longer owns.
+- **Array broadcasting** for `+ - * / ^ & = <> < > <= >=` between matrices and
+  scalars, which is what makes `=FILTER(A1:A9,A1:A9>5)` work - comparisons over
+  a range used to collapse to their first cell.
+- **Pivot tables (Calc).** Insert -> Pivot table summarises the used range with
+  row/column/value fields and sum/count/average/min/max aggregation. The grid
+  is computed live, rendered on the sheet with refresh and remove, and the
+  definition is kept in `.oswk`. XLSX export materialises the computed values
+  at the anchor and warns that the result is not a live Excel pivot; the Rust
+  side runs the same aggregation (`officecore::pivot`).
+- **Extended statistics**: `VAR.S`, `VAR.P`, `VARP`, `STDEV.S`, `STDEV.P`,
+  `PERCENTILE`, `PERCENTILE.INC`, `QUARTILE`, `QUARTILE.INC`, `CORREL`,
+  `COVARIANCE.P`, `COVARIANCE.S`, `COVAR`.
+- **Writer pagination engine** (`src/office/writer/pagination.ts` and
+  `measure.ts`): line boxes and table rows are measured in a hidden probe at
+  the exact content width and split into page fragments with widow/orphan
+  control, keep-with-next, keep-together, page-break-before and repeated table
+  header rows on continuation pages.
+- **Writer paginated view**: real page containers at the document's page size
+  with per-page headers/footers and `{{page}}` / `{{pages}}` numbers; the page
+  count in the status bar is the laid-out count, not a scroll-height estimate.
+  Clicking a page opens the continuous editor on that block; View -> Paginated
+  / Continuous switches modes.
+- **Table of contents**: Insert TOC builds entries from Heading 1-6 paragraphs
+  with page numbers and click-to-jump, Update TOC refreshes them. The TOC is
+  exported as static entries to DOCX, ODT, RTF, HTML and Markdown, and is
+  rendered by the PDF export.
+- **Navigation pane** listing the heading outline, with jump-to-block.
+- `keepWithNext` / `keepTogether` paragraph properties, written to DOCX as
+  `w:keepNext` / `w:keepLines`.
+- Performance smoke tests for 10k, 50k and 100k cell workbooks plus a
+  1 000-cell dependency chain.
+
+### Fixed
+
+- Calc: array comparisons (for example `A1:A3>1`) inside functions evaluated
+  only their first cell, silently giving a scalar instead of a column.
+- Calc: a formula that returns a matrix stored the whole matrix in the cell
+  value; the source cell now stores its first value and the rest spills.
+- Writer: a table continuation page did not repeat the header row and table
+  fragments could be laid out with the wrong row offset.
+
+### Security
+
+- No new macro or script behaviour; TOC text and keep properties are plain
+  model data. The ZIP/XML/redaction hardening from earlier releases is
+  unchanged and still covered by its tests.
+
+### Compatibility
+
+- `.oswk` files written by 2.2.0 and earlier open unchanged: every new field
+  (`keepWithNext`, `keepTogether`, `pivotTables`, `toc` blocks) is
+  serde-defaulted in the Rust model.
+- DOCX export writes `w:keepNext`/`w:keepLines` and static TOC lines; the TOC
+  is not a live Word field, which the save warnings state.
+- XLSX export of pivot tables writes values, not a pivot cache, and warns.
+
+### Tests
+
+- Rust: 246 tests (was 241), including pivot engine tests and the XLSX pivot
+  materialisation round trip.
+- Frontend: 375 tests (was 325), including dependency-graph, spill,
+  pagination-rule, pivot, and editor component tests.
+
 ## [2.2.0]
 
 A reliability release: no new screens, but the editors, the formula engine and

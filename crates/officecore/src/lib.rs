@@ -21,6 +21,7 @@ pub mod layout;
 pub mod model;
 pub mod odf;
 pub mod pdfcanvas;
+pub mod pivot;
 pub mod pptx;
 pub mod rtf;
 pub mod textio;

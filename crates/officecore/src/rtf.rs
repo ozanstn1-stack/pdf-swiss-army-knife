@@ -257,6 +257,17 @@ fn write_block(out: &mut String, block: &Block, tables: &mut RtfTables, document
         }
         Block::PageBreak => out.push_str("\\page\n"),
         Block::Rule => out.push_str("\\pard\\brdrb\\brdrs\\brdrw6 \\par\n"),
+        Block::Toc { entries } => {
+            for entry in entries {
+                let text = if entry.page > 0 {
+                    format!("{} .... {}", entry.text, entry.page)
+                } else {
+                    entry.text.clone()
+                };
+                let indent = (entry.level.saturating_sub(1) as i64) * 240;
+                out.push_str(&format!("\\pard\\li{indent} {}\\par\n", escape_rtf(&text)));
+            }
+        }
     }
 }
 

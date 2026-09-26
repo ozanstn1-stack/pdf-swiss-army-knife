@@ -33,6 +33,8 @@ export const ERR = {
   // Cycles are reported as #REF! (what Excel and LibreOffice both display) with
   // a detail that only the UI surfaces.
   circular: () => new FormulaError("#REF!", "circular reference"),
+  // A dynamic array whose spill range is blocked by existing data.
+  spill: () => new FormulaError("#SPILL!", "the spill range is not empty"),
 };
 
 export function isError(value: unknown): value is FormulaError {

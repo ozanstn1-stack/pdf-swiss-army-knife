@@ -669,8 +669,24 @@ impl<'a> Renderer<'a> {
                 canvas.line(x, y, x + width, y, Rgb(148, 163, 184), 0.8, "solid");
                 self.y += 14.0;
             }
+            Block::Toc { entries } => {
+                for entry in entries {
+                    let (props, runs) = toc_entry_line(entry);
+                    self.draw_paragraph(&props, &runs);
+                }
+            }
         }
     }
+}
+
+/// One table-of-contents line as a paragraph, dot leader included.
+pub(crate) fn toc_entry_line(entry: &TocEntry) -> (ParaProps, Vec<Run>) {
+    let mut props = ParaProps::default();
+    props.style = format!("Toc{}", entry.level.clamp(1, 6));
+    props.indent_left_pt = entry.level.saturating_sub(1) as f64 * 14.0;
+    props.space_after_pt = 2.0;
+    let text = if entry.page > 0 { format!("{} .... {}", entry.text, entry.page) } else { entry.text.clone() };
+    (props, vec![Run { text, ..Default::default() }])
 }
 
 /// Height of a block sequence when laid out at a given width (no drawing).
@@ -702,6 +718,21 @@ fn measure_blocks(fonts: &FontSet, document: &TextDocument, blocks: &[Block], wi
             }
             Block::Rule => height += 14.0,
             Block::PageBreak => {}
+            Block::Toc { entries } => {
+                for entry in entries {
+                    let (props, runs) = toc_entry_line(entry);
+                    let (words, base) = paragraph_words(document, &props, &runs);
+                    let available = (width - base.indent_left_pt - base.indent_right_pt).max(12.0);
+                    let spacing = if base.line_spacing > 0.0 { base.line_spacing } else { 1.15 };
+                    height += base.space_before_pt;
+                    for segment in split_on_newlines(words) {
+                        for line in break_line(fonts, &segment, available, &base.align) {
+                            height += line.height * spacing;
+                        }
+                    }
+                    height += base.space_after_pt;
+                }
+            }
             Block::Table { table } => {
                 let columns = table.rows.iter().map(|row| row.cells.len()).max().unwrap_or(1).max(1);
                 let column_width = width / columns as f64;

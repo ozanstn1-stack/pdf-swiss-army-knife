@@ -18,6 +18,7 @@ import {
   FolderOpen,
   Grid3x3,
   Printer,
+  RefreshCw,
   Italic,
   Merge,
   Minus,
@@ -35,11 +36,13 @@ import type { OfficeTab, Workbook } from "../lib/office-store";
 import { useOfficeTabs } from "../lib/office-store";
 import { useT } from "../lib/i18n";
 import { useToasts } from "../lib/store";
-import { cellText, defaultCellStyle, defaultPrintSettings, emptyCell, newSheet, type Cell, type CellStyle, type ChartData, type CondRule, type NamedRange, type PrintSettings, type Sheet } from "../lib/office-types";
+import { cellText, defaultCellStyle, defaultPrintSettings, emptyCell, newSheet, type Cell, type CellStyle, type ChartData, type CondRule, type NamedRange, type PivotTable, type PivotValueField, type PrintSettings, type Sheet } from "../lib/office-types";
+import { computePivot, pivotFields } from "./calc/pivot";
 import {
   addressesInRange,
   columnLabel,
   formatAddress,
+  isError,
   parseAddress,
   parseRange,
   type Scalar,
@@ -96,6 +99,7 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   const [formulaDraft, setFormulaDraft] = useState("");
   const [scroll, setScroll] = useState({ top: 0, left: 0, width: 900, height: 500 });
   const [chartDialog, setChartDialog] = useState(false);
+  const [pivotDialog, setPivotDialog] = useState(false);
   const [conditionalDialog, setConditionalDialog] = useState(false);
   const [validationDialog, setValidationDialog] = useState(false);
   const [nameDialog, setNameDialog] = useState(false);
@@ -643,6 +647,30 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
     setChartDialog(false);
   };
 
+  /** Adds a pivot over the current selection, anchored below it. */
+  const addPivot = (config: { rows: string[]; columns: string[]; values: PivotValueField[]; filters: PivotTable["filters"] }) => {
+    const parts = parseRange(usedRange(sheet));
+    if (!parts) {
+      useToasts.getState().push({ kind: "info", title: t("calc.pivotNeedsData") });
+      return;
+    }
+    const source = usedRange(sheet);
+    const anchor = formatAddress(parts.end.row + 2, parts.start.col);
+    const pivot: PivotTable = {
+      id: crypto.randomUUID(),
+      name: `Pivot${(sheet.pivotTables?.length ?? 0) + 1}`,
+      sourceSheet: sheet.name,
+      source,
+      rows: config.rows,
+      columns: config.columns,
+      values: config.values,
+      filters: config.filters,
+      anchor,
+    };
+    updateSheet((current) => ({ ...current, pivotTables: [...(current.pivotTables ?? []), pivot] }));
+    setPivotDialog(false);
+  };
+
   const addConditional = (rule: { kind: string; values: string[]; fill: string; topN?: number }) => {
     const range = usedRange(sheet);
     updateSheet((current) => ({
@@ -845,9 +873,14 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
         ) : null}
 
         {ribbon === "insert" ? (
-          <RibbonGroup label={t("calc.charts")}>
-            <ToolButton icon={<BarChart3 size={16} />} label={t("calc.chart")} onClick={() => setChartDialog(true)} />
-          </RibbonGroup>
+          <>
+            <RibbonGroup label={t("calc.charts")}>
+              <ToolButton icon={<BarChart3 size={16} />} label={t("calc.chart")} onClick={() => setChartDialog(true)} />
+            </RibbonGroup>
+            <RibbonGroup label={t("calc.pivotTable")}>
+              <ToolButton icon={<Grid3x3 size={16} />} label={t("calc.pivotTable")} onClick={() => setPivotDialog(true)} />
+            </RibbonGroup>
+          </>
         ) : null}
 
         {ribbon === "formulas" ? (
@@ -1097,6 +1130,20 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
                 />
               );
             })}
+            {(sheet.pivotTables ?? []).map((pivot) => {
+              const position = parseAddress(pivot.anchor) ?? { row: 0, col: 0 };
+              return (
+                <PivotBox
+                  key={pivot.id}
+                  pivot={pivot}
+                  sheet={sheet}
+                  workbook={workbook}
+                  x={columnX(position.col)}
+                  y={position.row * ROW_HEIGHT + ROW_HEIGHT - scroll.top}
+                  onRemove={() => updateSheet((current) => ({ ...current, pivotTables: (current.pivotTables ?? []).filter((candidate) => candidate.id !== pivot.id) }))}
+                />
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1149,6 +1196,10 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
           </div>
           <p className="muted">{t("calc.chartHint")}</p>
         </Dialog>
+      ) : null}
+
+      {pivotDialog ? (
+        <PivotDialog workbook={workbook} sheet={sheet} onClose={() => setPivotDialog(false)} onApply={addPivot} />
       ) : null}
 
       {conditionalDialog ? (
@@ -1473,6 +1524,142 @@ function pieSlices(values: number[], palette: string[]): Array<{ path: string; c
 // ---------------------------------------------------------------------------
 // Dialogs
 // ---------------------------------------------------------------------------
+
+/** The live pivot grid, rendered over the sheet at the pivot's anchor. */
+function PivotBox({
+  pivot,
+  sheet,
+  workbook,
+  x,
+  y,
+  onRemove,
+}: {
+  pivot: PivotTable;
+  sheet: Sheet;
+  workbook: Workbook;
+  x: number;
+  y: number;
+  onRemove: () => void;
+}) {
+  const t = useT();
+  const [refreshToken, setRefreshToken] = useState(0);
+  // Recomputing on every relevant render keeps the pivot live; the refresh
+  // button is for an explicit "show me the current data" action and bumps a
+  // token so the memo is invalidated even when nothing else changed.
+  const result = useMemo(() => computePivot(workbook, pivot), [workbook, pivot, refreshToken, sheet]);
+  return (
+    <div className="pivot-box" style={{ left: x, top: y }}>
+      <div className="chart-head">
+        <strong>{pivot.name}</strong>
+        <span className="spacer" />
+        <button type="button" className="icon-btn" onClick={() => setRefreshToken((value) => value + 1)} title={t("calc.pivotRefresh")}>
+          <RefreshCw size={12} />
+        </button>
+        <button type="button" className="icon-btn" onClick={onRemove} title={t("common.delete")}>
+          <Trash2 size={12} />
+        </button>
+      </div>
+      {result ? (
+        <table className="pivot-grid">
+          <tbody>
+            {result.grid.map((line, rowIndex) => (
+              <tr key={rowIndex}>
+                {line.map((value, colIndex) => (
+                  <td key={colIndex} className={colIndex < result.rowFieldCount || rowIndex === 0 ? "is-label" : undefined}>
+                    {isError(value) ? value.code : value === "" ? "" : String(value)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted" style={{ padding: "6px 10px" }}>
+          {t("calc.pivotNeedsData")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Configure a pivot over the sheet's used range. */
+function PivotDialog({
+  workbook,
+  sheet,
+  onClose,
+  onApply,
+}: {
+  workbook: Workbook;
+  sheet: Sheet;
+  onClose: () => void;
+  onApply: (config: { rows: string[]; columns: string[]; values: PivotValueField[]; filters: PivotTable["filters"] }) => void;
+}) {
+  const t = useT();
+  const source = usedRange(sheet);
+  const fields = pivotFields(workbook, sheet.name, source);
+  const [row, setRow] = useState(fields[0] ?? "");
+  const [column, setColumn] = useState("");
+  const [value, setValue] = useState(fields[fields.length - 1] ?? fields[0] ?? "");
+  const [aggregation, setAggregation] = useState<PivotValueField["aggregation"]>("sum");
+  return (
+    <Dialog title={t("calc.pivotTable")} onClose={onClose}>
+      <div className="stack">
+        <p className="muted">
+          {t("calc.pivotHint")} · {source}
+        </p>
+        <label className="field">
+          <span>{t("calc.pivotRows")}</span>
+          <select value={row} onChange={(event) => setRow(event.target.value)}>
+            {fields.map((field) => (
+              <option key={field} value={field}>
+                {field}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>{t("calc.pivotColumns")}</span>
+          <select value={column} onChange={(event) => setColumn(event.target.value)}>
+            <option value="">—</option>
+            {fields.map((field) => (
+              <option key={field} value={field}>
+                {field}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>{t("calc.pivotValues")}</span>
+          <select value={value} onChange={(event) => setValue(event.target.value)}>
+            {fields.map((field) => (
+              <option key={field} value={field}>
+                {field}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>{t("calc.pivotAggregation")}</span>
+          <select value={aggregation} onChange={(event) => setAggregation(event.target.value as PivotValueField["aggregation"])}>
+            {(["sum", "count", "average", "min", "max"] as const).map((kind) => (
+              <option key={kind} value={kind}>
+                {t(`calc.agg_${kind}`)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={fields.length < 2}
+          onClick={() => onApply({ rows: row ? [row] : [], columns: column ? [column] : [], values: value ? [{ field: value, aggregation }] : [], filters: [] })}
+        >
+          {t("calc.pivotInsert")}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
 
 function ConditionalDialog({ onClose, onApply }: { onClose: () => void; onApply: (rule: { kind: string; values: string[]; fill: string; topN?: number }) => void }) {
   const t = useT();

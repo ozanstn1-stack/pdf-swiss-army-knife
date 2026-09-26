@@ -275,9 +275,64 @@ struct SheetPart {
     comments: Vec<(String, String)>,
 }
 
+/// One worksheet cell as row XML, or `None` when there is nothing to write.
+fn cell_xml(
+    address: &str,
+    value: &CellValue,
+    formula: Option<&str>,
+    style: &CellStyle,
+    has_link: bool,
+    has_comment: bool,
+    styles: &mut StyleTable,
+    shared: &mut Vec<String>,
+    shared_index: &mut BTreeMap<String, usize>,
+) -> Option<String> {
+    let style_id = styles.xf_id(style);
+    let style_attr = if style_id > 0 { format!(" s=\"{style_id}\"") } else { String::new() };
+    let formula = formula.map(|formula| formula.trim_start_matches('=').to_string());
+    let mut value_xml = String::new();
+    let mut type_attr = String::new();
+    match value {
+        CellValue::Number(number) => value_xml = format!("<v>{number}</v>"),
+        CellValue::Bool(value) => {
+            type_attr = " t=\"b\"".into();
+            value_xml = format!("<v>{}</v>", if *value { 1 } else { 0 });
+        }
+        CellValue::Error(error) => {
+            type_attr = " t=\"e\"".into();
+            value_xml = format!("<v>{}</v>", escape_text(error));
+        }
+        CellValue::Text(text) if !text.is_empty() => {
+            if formula.is_some() {
+                type_attr = " t=\"str\"".into();
+                value_xml = format!("<v>{}</v>", escape_text(text));
+            } else {
+                let index = match shared_index.get(text) {
+                    Some(index) => *index,
+                    None => {
+                        let index = shared.len();
+                        shared.push(text.clone());
+                        shared_index.insert(text.clone(), index);
+                        index
+                    }
+                };
+                type_attr = " t=\"s\"".into();
+                value_xml = format!("<v>{index}</v>");
+            }
+        }
+        _ => {}
+    }
+    let formula_xml = formula.map(|formula| format!("<f>{}</f>", escape_text(&formula))).unwrap_or_default();
+    if formula_xml.is_empty() && value_xml.is_empty() && style == &CellStyle::default() && !has_link && !has_comment {
+        return None;
+    }
+    Some(format!("<c r=\"{address}\"{style_attr}{type_attr}>{formula_xml}{value_xml}</c>"))
+}
+
 fn sheet_xml(
     sheet: &Sheet,
     drawing_number: Option<usize>,
+    pivot_cells: &[(String, CellValue)],
     styles: &mut StyleTable,
     shared: &mut Vec<String>,
     shared_index: &mut BTreeMap<String, usize>,
@@ -360,6 +415,18 @@ fn sheet_xml(
             rows.entry(row).or_default().push((column, cell));
         }
     }
+    // Pivot output is materialised as plain values at the anchor; merging it
+    // here keeps the exporter from needing a second sheet copy.
+    let mut pivot_rows: BTreeMap<u32, Vec<(u32, CellValue)>> = BTreeMap::new();
+    for (address, value) in pivot_cells {
+        if let Some((row, column)) = crate::address::parse(address) {
+            pivot_rows.entry(row).or_default().push((column, value.clone()));
+        }
+    }
+    for line in pivot_rows.values_mut() {
+        line.sort_by_key(|(column, _)| *column);
+    }
+
     for (row, mut cells) in rows {
         cells.sort_by_key(|(column, _)| *column);
         match sheet.row_heights.get(&row) {
@@ -370,48 +437,45 @@ fn sheet_xml(
                 writer.raw(&format!("<row r=\"{}\">", row + 1));
             }
         }
+        // Two-pointer merge of the model cells and the pivot cells, both
+        // sorted by column.
+        enum RowCell<'a> {
+            Model(&'a Cell),
+            Pivot(&'a CellValue),
+        }
+        let pivot_line = pivot_rows.get(&row).map(Vec::as_slice).unwrap_or(&[]);
+        let mut pivot_index = 0usize;
+        let mut merged: Vec<(u32, RowCell)> = Vec::with_capacity(cells.len() + pivot_line.len());
         for (column, cell) in cells {
+            while pivot_index < pivot_line.len() && pivot_line[pivot_index].0 < column {
+                merged.push((pivot_line[pivot_index].0, RowCell::Pivot(&pivot_line[pivot_index].1)));
+                pivot_index += 1;
+            }
+            merged.push((column, RowCell::Model(cell)));
+        }
+        while pivot_index < pivot_line.len() {
+            merged.push((pivot_line[pivot_index].0, RowCell::Pivot(&pivot_line[pivot_index].1)));
+            pivot_index += 1;
+        }
+        for (column, entry) in merged {
             let address = crate::address::format(row, column);
-            let style_id = styles.xf_id(&cell.style);
-            let style_attr = if style_id > 0 { format!(" s=\"{style_id}\"") } else { String::new() };
-            let formula = cell.formula.as_deref().map(|formula| formula.trim_start_matches('=').to_string());
-            let mut value_xml = String::new();
-            let mut type_attr = String::new();
-            match &cell.value {
-                CellValue::Number(number) => value_xml = format!("<v>{number}</v>"),
-                CellValue::Bool(value) => {
-                    type_attr = " t=\"b\"".into();
-                    value_xml = format!("<v>{}</v>", if *value { 1 } else { 0 });
-                }
-                CellValue::Error(error) => {
-                    type_attr = " t=\"e\"".into();
-                    value_xml = format!("<v>{}</v>", escape_text(error));
-                }
-                CellValue::Text(text) if !text.is_empty() => {
-                    if formula.is_some() {
-                        type_attr = " t=\"str\"".into();
-                        value_xml = format!("<v>{}</v>", escape_text(text));
-                    } else {
-                        let index = match shared_index.get(text) {
-                            Some(index) => *index,
-                            None => {
-                                let index = shared.len();
-                                shared.push(text.clone());
-                                shared_index.insert(text.clone(), index);
-                                index
-                            }
-                        };
-                        type_attr = " t=\"s\"".into();
-                        value_xml = format!("<v>{index}</v>");
-                    }
-                }
-                _ => {}
+            let xml = match entry {
+                RowCell::Model(cell) => cell_xml(
+                    &address,
+                    &cell.value,
+                    cell.formula.as_deref(),
+                    &cell.style,
+                    cell.link.is_some(),
+                    cell.comment.as_deref().map(|text| !text.trim().is_empty()).unwrap_or(false),
+                    styles,
+                    shared,
+                    shared_index,
+                ),
+                RowCell::Pivot(value) => cell_xml(&address, value, None, &CellStyle::default(), false, false, styles, shared, shared_index),
+            };
+            if let Some(xml) = xml {
+                writer.raw(&xml);
             }
-            let formula_xml = formula.map(|formula| format!("<f>{}</f>", escape_text(&formula))).unwrap_or_default();
-            if formula_xml.is_empty() && value_xml.is_empty() && cell.style == CellStyle::default() && cell.link.is_none() && cell.comment.is_none() {
-                continue;
-            }
-            writer.raw(&format!("<c r=\"{address}\"{style_attr}{type_attr}>{formula_xml}{value_xml}</c>"));
         }
         writer.raw("</row>");
     }
@@ -903,6 +967,7 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
     let mut sheet_parts: Vec<SheetPart> = Vec::new();
     let mut sheet_drawings: Vec<Option<usize>> = Vec::new();
     let mut drawing_number = 0usize;
+    let mut pivots_materialized = 0usize;
     for (index, sheet) in workbook.sheets.iter().enumerate() {
         let drawing = if sheet_charts[index].is_empty() {
             None
@@ -911,7 +976,16 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
             Some(drawing_number)
         };
         sheet_drawings.push(drawing);
-        sheet_parts.push(sheet_xml(sheet, drawing, &mut styles, &mut shared, &mut shared_index));
+        let pivot_cells = crate::pivot::materialize(workbook, sheet);
+        if !pivot_cells.is_empty() {
+            pivots_materialized += 1;
+        }
+        sheet_parts.push(sheet_xml(sheet, drawing, &pivot_cells, &mut styles, &mut shared, &mut shared_index));
+    }
+    if pivots_materialized > 0 {
+        warnings.push(format!(
+            "Pivot tables are written as their computed values (one sheet so far: {pivots_materialized}); the live pivot definition stays in the .oswk file."
+        ));
     }
 
     let mut zip = ZipWriter::new();

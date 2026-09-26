@@ -46,7 +46,7 @@ import type { OfficeTab, TextDocument } from "../lib/office-store";
 import { useOfficeTabs } from "../lib/office-store";
 import { useToasts, reportError } from "../lib/store";
 import { useT } from "../lib/i18n";
-import { uid, wordCount, type Block, type DocComment, type ImageData, type ParaProps, type Run, type TableData } from "../lib/office-types";
+import { uid, wordCount, type Block, type DocComment, type ImageData, type ParaProps, type Run, type TableData, type TocEntry } from "../lib/office-types";
 import { defaultPageSetup, defaultParaProps, emptyMetadata, newParaBlock, newTextDocument } from "../lib/office-types";
 import { Dialog, Ribbon, RibbonGroup, ToolButton, ToolColor, ToolNumber, ToolSelect, useTablePicker } from "./office-ui";
 import { openIntoWorkspace, useEditorShortcuts, useOfficeSession } from "./useOfficeSession";
@@ -64,6 +64,9 @@ import {
 import { caretOffset, caretOnFirstLine, caretOnLastLine, repaintParagraph, selectedRange, setCaretOffset } from "./writer/caret";
 import { domToRuns, runsToHtml, wrapCellRuns } from "./writer/writerDom";
 import { emptyRun as emptyWriterRun } from "./writer/runs";
+import { measureBlocks } from "./writer/measure";
+import { paginate, pageOfBlock, type Fragment, type PageLayout } from "./writer/pagination";
+import { LayoutList, ListTree, ListOrdered as TocIcon, RefreshCw } from "lucide-react";
 
 export { runsToHtml, domToRuns };
 
@@ -101,7 +104,15 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [insertTable, setInsertTable] = useState(false);
   const [selectedImage, setSelectedImage] = useState<number | null>(null);
-  const [pages, setPages] = useState(1);
+  const [pageCount, setPageCount] = useState(1);
+  // V2.5: a real paginated view. The page layout is measured from a hidden
+  // probe column and computed by the pagination engine; "continuous" keeps the
+  // pre-2.5 editing surface for users who prefer it.
+  const [view, setView] = useState<"paginated" | "continuous">("paginated");
+  const [pages, setPages] = useState<PageLayout[]>([{ fragments: [], usedPx: 0, continuation: false }]);
+  const [navOpen, setNavOpen] = useState(false);
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  const probeRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   // Caret the model wants placed after a structural edit. It is consumed by
   // the layout effect below, in the same commit that renders the new blocks.
@@ -141,13 +152,31 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
 
   const update = useCallback((mutate: (document: TextDocument) => TextDocument) => edit(tab.id, (model) => mutate(model as TextDocument)), [edit, tab.id]);
 
-  // Page count follows the rendered height of the document body.
+  const contentWidthPx = (document.page.widthPt - document.page.marginLeftPt - document.page.marginRightPt) * (96 / 72) * zoom;
+  const contentHeightPx = (document.page.heightPt - document.page.marginTopPt - document.page.marginBottomPt) * (96 / 72) * zoom;
+
+  // Real pagination: the probe renders every block at the exact content width,
+  // the engine measures its line and row boxes and splits them into pages.
+  useLayoutEffect(() => {
+    if (view !== "paginated" || editingHeader) return;
+    const probe = probeRef.current;
+    if (!probe) return;
+    const metrics = measureBlocks(probe, document.blocks);
+    setPages(paginate(metrics, Math.max(120, contentHeightPx)));
+  }, [view, editingHeader, document, contentWidthPx, contentHeightPx, zoom, layoutVersion]);
+
+  // The status bar shows the laid-out page count in the paginated view and the
+  // height estimate in the continuous one.
   useEffect(() => {
+    if (view === "paginated") {
+      setPageCount(pages.length);
+      return;
+    }
     if (!bodyRef.current) return;
     const height = bodyRef.current.scrollHeight;
     const pageHeight = document.page.heightPt * (96 / 72);
-    setPages(Math.max(1, Math.ceil(height / Math.max(200, pageHeight))));
-  }, [document, zoom]);
+    setPageCount(Math.max(1, Math.ceil(height / Math.max(200, pageHeight))));
+  }, [document, zoom, view, pages]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -692,6 +721,68 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
     void session.exportPdf();
   };
 
+  // -------------------------------------------------------------------------
+  // TOC and navigation
+  // -------------------------------------------------------------------------
+
+  /** The heading outline shared by the navigation pane and the TOC. */
+  const headingOutline = (): TocEntry[] => {
+    const entries: TocEntry[] = [];
+    document.blocks.forEach((block, index) => {
+      if (block.type !== "paragraph") return;
+      const match = /^Heading(\d)$/.exec(block.props.style);
+      if (!match) return;
+      entries.push({
+        text: runsText(block.runs).trim() || `Heading ${index + 1}`,
+        level: Number(match[1]),
+        page: pageOfBlock(pages, index),
+        anchor: index,
+      });
+    });
+    return entries;
+  };
+
+  const insertToc = () => {
+    const toc: Block = { type: "toc", entries: headingOutline() };
+    const index = activeIndex();
+    if (index !== null) insertBlockAfter(index, toc);
+    else {
+      const blocks = [...currentBlocks()];
+      blocks.unshift(toc);
+      withBlocks(blocks);
+    }
+  };
+
+  const updateToc = () => {
+    const entries = headingOutline();
+    update((doc) => ({ ...doc, blocks: doc.blocks.map((block) => (block.type === "toc" ? { ...block, entries } : block)) }));
+    setLayoutVersion((version) => version + 1);
+    useToasts.getState().push({ kind: "success", title: t("writer.tocUpdated") });
+  };
+
+  const jumpToBlock = (index: number) => {
+    if (view === "continuous" || editingHeader) {
+      const target = window.document.querySelector<HTMLElement>(`[data-scope="body"][data-block-index="${index}"]`);
+      target?.scrollIntoView({ block: "center" });
+      return;
+    }
+    const page = pageOfBlock(pages, index);
+    window.document.querySelector<HTMLElement>(`[data-page-index="${page - 1}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
+
+  /** Opens the continuous editor on a block (paginated pages are read-only). */
+  const editBlock = (index: number) => {
+    setView("continuous");
+    const block = document.blocks[index];
+    if (block?.type === "paragraph") {
+      pendingFocus.current = { index, offset: 0, scope: "body" };
+      return;
+    }
+    window.setTimeout(() => {
+      window.document.querySelector<HTMLElement>(`[data-scope="body"][data-block-index="${index}"]`)?.scrollIntoView({ block: "center" });
+    }, 0);
+  };
+
   const renderBlocks = (blocks: Block[], scope: "body" | "header" | "footer" | "cell", tablePath?: [number, number, number]) => (
     <>
       {blocks.map((block, index) => (
@@ -711,6 +802,7 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
           onUpdate={(next) => updateBlock(index, next)}
           onSyncCell={(path, element) => syncCell(path[0], path[1], path[2], element)}
           onStructure={(action) => handleStructure(action, scope)}
+          onOpenBlock={editBlock}
         />
       ))}
     </>
@@ -785,6 +877,10 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
             <RibbonGroup label={t("writer.pages")}>
               <ToolButton icon={<SeparatorHorizontal size={16} />} label={t("writer.pageBreak")} onClick={insertPageBreak} />
               <ToolButton icon={<Minus size={16} />} label={t("writer.horizontalRule")} onClick={insertRule} />
+            </RibbonGroup>
+            <RibbonGroup label={t("writer.tableOfContents")}>
+              <ToolButton icon={<TocIcon size={16} />} label={t("writer.insertToc")} onClick={insertToc} />
+              <ToolButton icon={<RefreshCw size={16} />} label={t("writer.updateToc")} onClick={updateToc} />
             </RibbonGroup>
             <RibbonGroup label={t("writer.headerFooter")}>
               <ToolButton icon={<FileText size={16} />} label={t("writer.header")} onClick={() => setEditingHeader(editingHeader === "header" ? null : "header")} active={editingHeader === "header"} />
@@ -867,6 +963,11 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
 
         {ribbon === "view" ? (
           <>
+            <RibbonGroup label={t("writer.view")}>
+              <ToolButton icon={<LayoutList size={16} />} label={t("writer.paginated")} onClick={() => setView("paginated")} active={view === "paginated"} />
+              <ToolButton label={t("writer.continuous")} onClick={() => setView("continuous")} active={view === "continuous"} />
+              <ToolButton icon={<ListTree size={16} />} label={t("writer.navigation")} onClick={() => setNavOpen((open) => !open)} active={navOpen} />
+            </RibbonGroup>
             <RibbonGroup label={t("writer.zoom")}>
               <ToolButton label="75%" onClick={() => setZoom(0.75)} active={zoom === 0.75} />
               <ToolButton label="100%" onClick={() => setZoom(1)} active={zoom === 1} />
@@ -902,18 +1003,83 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
         </span>
       </div>
 
-      <div className="editor-scroll">
-        <div className="writer-page" ref={bodyRef} data-scope={editingHeader ?? "body"} onMouseDown={handlePageMouseDown} style={{ width: pageWidth, minHeight: pageHeight, padding: `${marginTop}px ${marginX}px` }}>
-          {editingHeader ? (
-            <div className="writer-header-zone">{renderBlocks(editingHeader === "header" ? document.header : document.footer, editingHeader)}</div>
+      <div className="writer-stage">
+        {navOpen ? (
+          <div className="writer-nav-pane">
+            <div className="comments-head">
+              <strong>{t("writer.navigation")}</strong>
+              <button type="button" className="icon-btn" onClick={() => setNavOpen(false)} aria-label={t("common.close")}>
+                <X size={14} />
+              </button>
+            </div>
+            {headingOutline().length === 0 ? <p className="muted">{t("writer.noHeadings")}</p> : null}
+            {headingOutline().map((entry) => (
+              <button
+                key={entry.anchor}
+                type="button"
+                className="writer-nav-item"
+                style={{ paddingLeft: 10 + (entry.level - 1) * 12 }}
+                onClick={() => jumpToBlock(entry.anchor)}
+              >
+                {entry.text}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="editor-scroll">
+          {view === "paginated" && !editingHeader ? (
+            <div className="writer-pages">
+              {pages.map((page, pageIndex) => (
+                <div
+                  key={pageIndex}
+                  className="writer-page writer-page-sheet"
+                  data-page-index={pageIndex}
+                  style={{ width: pageWidth, minHeight: pageHeight, padding: `${marginTop}px ${marginX}px` }}
+                >
+                  {document.header.length > 0 ? (
+                    <div className="writer-header-zone muted">
+                      <StaticBlocks blocks={document.header} scope="header" page={pageIndex + 1} pages={pages.length} zoom={zoom} onOpen={editBlock} />
+                    </div>
+                  ) : null}
+                  <div className="writer-body" style={{ height: contentHeightPx, overflow: "hidden" }}>
+                    {page.fragments.map((fragment, fragmentIndex) => (
+                      <PageFragmentView
+                        key={`${fragment.index}-${fragment.from}-${fragmentIndex}`}
+                        fragment={fragment}
+                        block={document.blocks[fragment.index]}
+                        zoom={zoom}
+                        onOpen={() => editBlock(fragment.index)}
+                      />
+                    ))}
+                  </div>
+                  {document.footer.length > 0 ? (
+                    <div className="writer-footer-zone muted">
+                      <StaticBlocks blocks={document.footer} scope="footer" page={pageIndex + 1} pages={pages.length} zoom={zoom} onOpen={editBlock} />
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
           ) : (
-            <>
-              {document.header.length > 0 ? <div className="writer-header-zone muted">{renderBlocks(document.header, "header")}</div> : null}
-              <div className="writer-body">{renderBlocks(document.blocks, "body")}</div>
-              {document.footer.length > 0 ? <div className="writer-footer-zone muted">{renderBlocks(document.footer, "footer")}</div> : null}
-            </>
+            <div className="writer-page" ref={bodyRef} data-scope={editingHeader ?? "body"} onMouseDown={handlePageMouseDown} style={{ width: pageWidth, minHeight: pageHeight, padding: `${marginTop}px ${marginX}px` }}>
+              {editingHeader ? (
+                <div className="writer-header-zone">{renderBlocks(editingHeader === "header" ? document.header : document.footer, editingHeader)}</div>
+              ) : (
+                <>
+                  {document.header.length > 0 ? <div className="writer-header-zone muted">{renderBlocks(document.header, "header")}</div> : null}
+                  <div className="writer-body">{renderBlocks(document.blocks, "body")}</div>
+                  {document.footer.length > 0 ? <div className="writer-footer-zone muted">{renderBlocks(document.footer, "footer")}</div> : null}
+                </>
+              )}
+            </div>
           )}
         </div>
+      </div>
+
+      {/* Hidden probe: the pagination engine measures this column. */}
+      <div className="writer-probe" aria-hidden="true" ref={probeRef} style={{ width: contentWidthPx }}>
+        <StaticBlocks blocks={document.blocks} scope="probe" page={1} pages={1} zoom={zoom} onOpen={() => undefined} />
       </div>
 
       <div className="editor-status">
@@ -924,7 +1090,7 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
           {stats.characters} {t("writer.characters")}
         </span>
         <span>
-          {pages} {t("writer.pages")}
+          {pageCount} {t("writer.pages")}
         </span>
         <span className="spacer" />
         <span>{Math.round(zoom * 100)}%</span>
@@ -1035,6 +1201,176 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
 }
 
 // ---------------------------------------------------------------------------
+// Static (read-only) rendering for the paginated pages and the layout probe
+// ---------------------------------------------------------------------------
+
+/** Replaces `{{page}}` / `{{pages}}` tokens in header/footer text. */
+function substituteTokens(runs: Run[], page: number, pages: number): Run[] {
+  if (page <= 0) return runs;
+  return runs.map((run) => ({
+    ...run,
+    text: run.text.replace(/\{\{page\}\}/g, String(page)).replace(/\{\{pages\}\}/g, String(pages)),
+  }));
+}
+
+function StaticParagraph({
+  block,
+  index,
+  scope,
+  zoom,
+  page = 0,
+  pages = 0,
+}: {
+  block: Extract<Block, { type: "paragraph" }>;
+  index: number;
+  scope: string;
+  zoom: number;
+  page?: number;
+  pages?: number;
+}) {
+  const props = block.props;
+  const listMarker = props.list ? (props.list.kind === "number" ? `${props.list.start}.` : ["•", "◦", "▪"][props.list.level % 3]) : null;
+  return (
+    <div className="para-row" data-block-index={index} data-scope={scope} style={{ marginLeft: props.list ? props.list.level * 24 : 0 }}>
+      {listMarker ? <span className="list-marker">{listMarker}</span> : null}
+      <div
+        className={`para para-${props.style.toLowerCase()}${props.pageBreakBefore ? " page-break-before" : ""}`}
+        style={{
+          textAlign: props.align as "left" | "center" | "right" | "justify",
+          lineHeight: props.lineSpacing,
+          marginBottom: props.spaceAfterPt,
+          marginTop: props.spaceBeforePt,
+          textIndent: props.firstLinePt,
+          fontSize: `${(effectiveFontSize(block) ?? 11) * zoom}pt`,
+        }}
+        dangerouslySetInnerHTML={{ __html: runsToHtml(substituteTokens(block.runs, page, pages)) }}
+      />
+    </div>
+  );
+}
+
+function StaticTable({ table, zoom, from = 0, to }: { table: TableData; zoom: number; from?: number; to?: number }) {
+  const end = to ?? table.rows.length;
+  const bodyRows = table.rows.slice(from, end);
+  const header = from > 0 && table.rows[0]?.header ? table.rows[0] : null;
+  const renderCellBlocks = (blocks: Block[]) => <StaticBlocks blocks={blocks} scope="cell" page={0} pages={0} zoom={zoom} onOpen={() => undefined} />;
+  return (
+    <div className="writer-table-wrap">
+      <table className={`writer-table${table.borders ? "" : " no-borders"}`} style={{ width: `${(table.columnWidthsPt.reduce((sum, value) => sum + value, 0) || 400) * (96 / 72) * zoom}px` }}>
+        <colgroup>
+          {table.columnWidthsPt.map((width, columnIndex) => (
+            <col key={columnIndex} style={{ width: `${width * (96 / 72) * zoom}px` }} />
+          ))}
+        </colgroup>
+        <tbody>
+          {[header, ...bodyRows].filter((row): row is NonNullable<typeof row> => Boolean(row)).map((row, rowIndex) => (
+            <tr key={rowIndex} className={row.header ? "is-header" : ""}>
+              {row.cells.map((cell, cellIndex) => (
+                <td
+                  key={cellIndex}
+                  colSpan={cell.colspan}
+                  rowSpan={cell.rowspan}
+                  style={{ background: cell.background ?? undefined, textAlign: (cell.align || "left") as "left" | "center" | "right", verticalAlign: (cell.valign || "top") as "top" | "middle" | "bottom" }}
+                >
+                  {renderCellBlocks(cell.blocks)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TocView({ entries, onOpen }: { entries: TocEntry[]; onOpen: (anchor: number) => void }) {
+  const t = useT();
+  return (
+    <nav className="writer-toc">
+      <div className="writer-toc-title">{t("writer.tableOfContents")}</div>
+      {entries.length === 0 ? <p className="muted">{t("writer.noHeadings")}</p> : null}
+      {entries.map((entry) => (
+        <button key={`${entry.anchor}-${entry.level}`} type="button" className="writer-toc-item" style={{ paddingLeft: (entry.level - 1) * 16 }} onClick={() => onOpen(entry.anchor)}>
+          <span>{entry.text}</span>
+          <span className="writer-toc-fill" />
+          <span>{entry.page > 0 ? entry.page : ""}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function StaticBlocks({
+  blocks,
+  scope,
+  page,
+  pages,
+  zoom,
+  onOpen,
+}: {
+  blocks: Block[];
+  scope: string;
+  page: number;
+  pages: number;
+  zoom: number;
+  onOpen: (index: number) => void;
+}) {
+  return (
+    <>
+      {blocks.map((block, index) => {
+        if (block.type === "paragraph") {
+          return <StaticParagraph key={index} block={block} index={index} scope={scope} zoom={zoom} page={page} pages={pages} />;
+        }
+        return (
+          <div key={index} data-block-index={index} data-scope={scope}>
+            {block.type === "table" ? <StaticTable table={block.table} zoom={zoom} /> : null}
+            {block.type === "image" ? (
+              <figure className="writer-image" style={{ textAlign: block.align as "left" | "center" | "right" }}>
+                <img src={`data:${block.image.mime};base64,${block.image.dataBase64}`} alt={block.image.alt} style={{ width: block.widthPt * (96 / 72) * zoom }} />
+                <figcaption>{block.caption || block.image.name}</figcaption>
+              </figure>
+            ) : null}
+            {block.type === "pageBreak" ? (
+              <div className="writer-page-break">
+                <span>— page break —</span>
+              </div>
+            ) : null}
+            {block.type === "toc" ? <TocView entries={block.entries} onOpen={onOpen} /> : null}
+            {block.type === "rule" ? <hr className="writer-rule" /> : null}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** One page fragment: whole block, paragraph lines or table rows. */
+function PageFragmentView({ fragment, block, zoom, onOpen }: { fragment: Fragment; block: Block | undefined; zoom: number; onOpen: () => void }) {
+  if (!block) return null;
+  if (fragment.mode === "lines" && block.type === "paragraph") {
+    return (
+      <div className="writer-fragment" style={{ height: fragment.heightPx, overflow: "hidden" }} onClick={onOpen}>
+        <div style={{ marginTop: -fragment.offsetPx }}>
+          <StaticParagraph block={block} index={fragment.index} scope="page" zoom={zoom} />
+        </div>
+      </div>
+    );
+  }
+  if (fragment.mode === "rows" && block.type === "table") {
+    return (
+      <div className="writer-fragment" onClick={onOpen}>
+        <StaticTable table={block.table} zoom={zoom} from={fragment.from} to={fragment.to} />
+      </div>
+    );
+  }
+  return (
+    <div className="writer-fragment" onClick={onOpen}>
+      <StaticBlocks blocks={[block]} scope="page" page={0} pages={0} zoom={zoom} onOpen={onOpen} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Block rendering
 // ---------------------------------------------------------------------------
 
@@ -1049,6 +1385,7 @@ function BlockView({
   onUpdate,
   onSyncCell,
   onStructure,
+  onOpenBlock,
 }: {
   block: Block;
   index: number;
@@ -1061,6 +1398,7 @@ function BlockView({
   onUpdate: (block: Block) => void;
   onSyncCell: (path: [number, number, number], element: HTMLElement) => void;
   onStructure: (action: StructureAction) => void;
+  onOpenBlock: (index: number) => void;
 }) {
   if (block.type === "paragraph") {
     return (
@@ -1098,6 +1436,9 @@ function BlockView({
         <span>— page break —</span>
       </div>
     );
+  }
+  if (block.type === "toc") {
+    return <TocView entries={block.entries} onOpen={onOpenBlock} />;
   }
   return <hr className="writer-rule" />;
 }

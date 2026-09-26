@@ -269,6 +269,58 @@ fn xlsx_export_writes_validation_conditional_formatting_and_charts() {
     assert!(content_types.contains("drawingml.chart+xml"));
 }
 
+#[test]
+fn xlsx_export_materializes_pivot_tables_as_values() {
+    let mut workbook = Workbook::new_blank("Pivot check");
+    workbook.sheets[0].name = "Data".into();
+    let sheet = &mut workbook.sheets[0];
+    let rows = [
+        ["Department", "Year", "Sales"],
+        ["Hardware", "2025", "100"],
+        ["Hardware", "2025", "150"],
+        ["Software", "2025", "200"],
+    ];
+    for (row, line) in rows.iter().enumerate() {
+        for (column, value) in line.iter().enumerate() {
+            let numeric = value.parse::<f64>().is_ok();
+            sheet.set(
+                &format!("{}{}", (b'A' + column as u8) as char, row + 1),
+                Cell {
+                    value: if numeric { CellValue::Number(value.parse().unwrap()) } else { CellValue::Text((*value).into()) },
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    sheet.pivot_tables.push(PivotTable {
+        id: "p1".into(),
+        name: "Pivot1".into(),
+        source_sheet: "Data".into(),
+        source: "A1:C4".into(),
+        rows: vec!["Department".into()],
+        columns: vec!["Year".into()],
+        values: vec![PivotValueField { field: "Sales".into(), aggregation: "sum".into() }],
+        filters: vec![],
+        anchor: "F1".into(),
+    });
+
+    // The definition survives a `.oswk`-style JSON round trip…
+    let json = serde_json::to_string(&workbook).unwrap();
+    let decoded: Workbook = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.sheets[0].pivot_tables.len(), 1);
+    assert_eq!(decoded.sheets[0].pivot_tables[0].rows, vec!["Department".to_string()]);
+
+    // …and the XLSX export warns and materialises the computed grid.
+    let result = officecore::xlsx::write_xlsx_package(&workbook).unwrap();
+    assert!(result.warnings.iter().any(|warning| warning.contains("Pivot tables")), "{:?}", result.warnings);
+    let read = officecore::xlsx::read_workbook_bytes(&result.bytes).unwrap();
+    let data = sheet_by_name(&read.workbook, "Data").expect("Data sheet");
+    assert_eq!(data.get("F1").map(|cell| cell.value.clone()), Some(CellValue::Text("Department".into())));
+    assert_eq!(data.get("G1").map(|cell| cell.value.clone()), Some(CellValue::Text("2025".into())));
+    assert_eq!(data.get("G2").map(|cell| cell.value.clone()), Some(CellValue::Number(250.0)));
+    assert_eq!(data.get("G3").map(|cell| cell.value.clone()), Some(CellValue::Number(200.0)));
+}
+
 /// Measures what a pure XLSX round trip through the importer loses, so the
 /// documented limitation stays true: values and formulas survive, layout and
 /// presentation metadata does not come back through `calamine`.

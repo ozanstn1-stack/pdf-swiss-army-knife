@@ -86,6 +86,23 @@ export interface ParaProps {
   firstLinePt: number;
   list: ListInfo | null;
   pageBreakBefore: boolean;
+  /**
+   * Pagination rules. Optional because files saved before 2.5 do not carry
+   * them; undefined reads as "off", which is Word's default.
+   */
+  keepWithNext?: boolean;
+  keepTogether?: boolean;
+}
+
+/** One line of a table of contents. */
+export interface TocEntry {
+  text: string;
+  /** Heading level, 1..6. */
+  level: number;
+  /** Page number as of the last update in the editor. */
+  page: number;
+  /** Index of the heading block, used to jump to it. */
+  anchor: number;
 }
 
 export interface Run {
@@ -133,7 +150,8 @@ export type Block =
   | { type: "table"; table: TableData }
   | { type: "image"; image: ImageData; widthPt: number; heightPt: number; align: string; caption: string }
   | { type: "pageBreak" }
-  | { type: "rule" };
+  | { type: "rule" }
+  | { type: "toc"; entries: TocEntry[] };
 
 export interface DocComment {
   id: string;
@@ -268,6 +286,36 @@ export interface FilterState {
   values: string[];
 }
 
+/** One aggregated column of a pivot table. */
+export interface PivotValueField {
+  field: string;
+  aggregation: "sum" | "count" | "average" | "min" | "max";
+}
+
+/** A filter on one source field; an empty list keeps everything. */
+export interface PivotFilter {
+  field: string;
+  values: string[];
+}
+
+/**
+ * A pivot table over a cell range whose first row holds the field names.
+ *
+ * The definition is the source of truth (kept in `.oswk`); the rendered grid
+ * is computed from it on the fly, so a pivot never goes stale in the model.
+ */
+export interface PivotTable {
+  id: string;
+  name: string;
+  sourceSheet: string;
+  source: string;
+  rows: string[];
+  columns: string[];
+  values: PivotValueField[];
+  filters: PivotFilter[];
+  anchor: string;
+}
+
 export interface Sheet {
   id: string;
   name: string;
@@ -280,6 +328,7 @@ export interface Sheet {
   freezeRows: number;
   freezeCols: number;
   charts: ChartPlacement[];
+  pivotTables: PivotTable[];
   conditional: CondRule[];
   validations: Validation[];
   filter: FilterState | null;
@@ -508,6 +557,8 @@ export function defaultParaProps(styleId = "Normal"): ParaProps {
     firstLinePt: 0,
     list: null,
     pageBreakBefore: false,
+    keepWithNext: false,
+    keepTogether: false,
   };
 }
 
@@ -623,6 +674,7 @@ export function newSheet(name: string): Sheet {
     freezeRows: 0,
     freezeCols: 0,
     charts: [],
+    pivotTables: [],
     conditional: [],
     validations: [],
     filter: null,

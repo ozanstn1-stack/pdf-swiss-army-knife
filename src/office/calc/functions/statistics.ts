@@ -49,24 +49,109 @@ registerFunction("MEDIAN", (args) => {
   const middle = Math.floor(values.length / 2);
   return values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
 }, 1, 64, false, { signature: "MEDIAN(number1, ...)", category: "Statistics" });
-registerFunction("STDEV", (args) => {
-  const values = numbers(args);
-  if (values.length < 2) return ERR.div();
-  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-  return Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1));
-}, 1, 64, false, { signature: "STDEV(number1, ...)", category: "Statistics" });
-registerFunction("STDEVP", (args) => {
-  const values = numbers(args);
-  if (values.length === 0) return ERR.div();
-  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-  return Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length);
-}, 1, 64, false, { signature: "STDEVP(number1, ...)", category: "Statistics" });
-registerFunction("VAR", (args) => {
+const sampleVariance = (args: Scalar[][][]) => {
   const values = numbers(args);
   if (values.length < 2) return ERR.div();
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
   return values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
-}, 1, 64, false, { signature: "VAR(number1, ...)", category: "Statistics" });
+};
+const populationVariance = (args: Scalar[][][]) => {
+  const values = numbers(args);
+  if (values.length === 0) return ERR.div();
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+};
+registerFunction("STDEV", (args) => {
+  const variance = sampleVariance(args);
+  return isError(variance) ? variance : Math.sqrt(variance);
+}, 1, 64, false, { signature: "STDEV(number1, ...)", category: "Statistics" });
+registerFunction("STDEV.S", (args) => {
+  const variance = sampleVariance(args);
+  return isError(variance) ? variance : Math.sqrt(variance);
+}, 1, 64, false, { signature: "STDEV.S(number1, ...)", category: "Statistics" });
+registerFunction("STDEVP", (args) => {
+  const variance = populationVariance(args);
+  return isError(variance) ? variance : Math.sqrt(variance);
+}, 1, 64, false, { signature: "STDEVP(number1, ...)", category: "Statistics" });
+registerFunction("STDEV.P", (args) => {
+  const variance = populationVariance(args);
+  return isError(variance) ? variance : Math.sqrt(variance);
+}, 1, 64, false, { signature: "STDEV.P(number1, ...)", category: "Statistics" });
+registerFunction("VAR", sampleVariance, 1, 64, false, { signature: "VAR(number1, ...)", category: "Statistics" });
+registerFunction("VAR.S", sampleVariance, 1, 64, false, { signature: "VAR.S(number1, ...)", category: "Statistics" });
+registerFunction("VARP", populationVariance, 1, 64, false, { signature: "VARP(number1, ...)", category: "Statistics" });
+registerFunction("VAR.P", populationVariance, 1, 64, false, { signature: "VAR.P(number1, ...)", category: "Statistics" });
+
+/** Inclusive percentile with linear interpolation between neighbours. */
+function percentileOf(values: number[], k: number): number | ReturnType<typeof ERR.num> {
+  if (values.length === 0 || k < 0 || k > 1) return ERR.num();
+  const position = (values.length - 1) * k;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return values[lower];
+  return values[lower] + (values[upper] - values[lower]) * (position - lower);
+}
+
+const percentile = (args: Scalar[][][]) => {
+  const values = numbers([args[0] ?? []]).sort((a, b) => a - b);
+  const k = toNumber(args[1]?.[0]?.[0] ?? 0);
+  if (isError(k)) return k;
+  return percentileOf(values, Math.trunc(k * 1e12) / 1e12);
+};
+registerFunction("PERCENTILE", percentile, 2, 2, false, { signature: "PERCENTILE(array, k)", category: "Statistics" });
+registerFunction("PERCENTILE.INC", percentile, 2, 2, false, { signature: "PERCENTILE.INC(array, k)", category: "Statistics" });
+const quartile = (args: Scalar[][][]) => {
+  const values = numbers([args[0] ?? []]).sort((a, b) => a - b);
+  const quart = toNumber(args[1]?.[0]?.[0] ?? 0);
+  if (isError(quart)) return quart;
+  const index = Math.trunc(quart);
+  if (index !== quart || index < 0 || index > 4) return ERR.num();
+  return percentileOf(values, index / 4);
+};
+registerFunction("QUARTILE", quartile, 2, 2, false, { signature: "QUARTILE(array, quart)", category: "Statistics" });
+registerFunction("QUARTILE.INC", quartile, 2, 2, false, { signature: "QUARTILE.INC(array, quart)", category: "Statistics" });
+
+/** Pairs two ranges into x/y series, stopping at the shorter one. */
+function pairedValues(args: Scalar[][][], minimum: number): { x: number[]; y: number[] } | ReturnType<typeof ERR.div> {
+  const x = numbers([args[0] ?? []]);
+  const y = numbers([args[1] ?? []]);
+  const length = Math.min(x.length, y.length);
+  if (length < minimum) return ERR.div();
+  return { x: x.slice(0, length), y: y.slice(0, length) };
+}
+
+function covarianceOf(x: number[], y: number[], divisor: number): number {
+  const meanX = x.reduce((sum, value) => sum + value, 0) / x.length;
+  const meanY = y.reduce((sum, value) => sum + value, 0) / y.length;
+  let total = 0;
+  for (let index = 0; index < x.length; index += 1) total += (x[index] - meanX) * (y[index] - meanY);
+  return total / divisor;
+}
+
+registerFunction("CORREL", (args) => {
+  const paired = pairedValues(args, 2);
+  if ("code" in paired) return paired;
+  const covariance = covarianceOf(paired.x, paired.y, paired.x.length - 1);
+  const spreadX = covarianceOf(paired.x, paired.x, paired.x.length - 1);
+  const spreadY = covarianceOf(paired.y, paired.y, paired.y.length - 1);
+  if (spreadX === 0 || spreadY === 0) return ERR.div();
+  return covariance / Math.sqrt(spreadX * spreadY);
+}, 2, 2, false, { signature: "CORREL(array1, array2)", category: "Statistics" });
+registerFunction("COVARIANCE.P", (args) => {
+  const paired = pairedValues(args, 1);
+  if ("code" in paired) return paired;
+  return covarianceOf(paired.x, paired.y, paired.x.length);
+}, 2, 2, false, { signature: "COVARIANCE.P(array1, array2)", category: "Statistics" });
+registerFunction("COVARIANCE.S", (args) => {
+  const paired = pairedValues(args, 2);
+  if ("code" in paired) return paired;
+  return covarianceOf(paired.x, paired.y, paired.x.length - 1);
+}, 2, 2, false, { signature: "COVARIANCE.S(array1, array2)", category: "Statistics" });
+registerFunction("COVAR", (args) => {
+  const paired = pairedValues(args, 1);
+  if ("code" in paired) return paired;
+  return covarianceOf(paired.x, paired.y, paired.x.length);
+}, 2, 2, false, { signature: "COVAR(array1, array2)", category: "Statistics" });
 
 registerFunction("LARGE", (args) => {
   const values = numbers([args[0] ?? []]).sort((a, b) => b - a);

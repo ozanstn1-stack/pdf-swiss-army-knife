@@ -9,27 +9,30 @@ Everything runs on your machine. Documents are never uploaded, there is no
 telemetry, and the app stays useful without an internet connection. Macros and
 embedded scripts in office files are never executed.
 
-**Version 2.2.0** · Platform: Windows (Tauri also targets Linux/macOS, but only
+**Version 2.5.0** · Platform: Windows (Tauri also targets Linux/macOS, but only
 Windows is built and verified here) · UI languages: English, Turkish.
 
-## What's new in 2.2.0
+## What's new in 2.5.0
 
-- **Calc keyboard entry is fixed for real.** After committing a cell with
-  `Enter`, the next cell accepts typing immediately - the focus/commit race is
-  closed at the root (same-event focus restore, no stale editor state) and
-  covered by component tests.
-- **Writer structural editing no longer rewrites stale text.** Enter, Backspace
-  merge, Delete merge and Shift+Enter repaint the paragraph before focus moves,
-  so the on-screen text and the document model can no longer disagree.
-- **XLSX export now embeds charts** (column, bar, line, pie, area) as real
-  ChartML parts anchored to their cells, and writes conditional formatting for
-  every rule kind the editor offers - including data bars. Unsupported cases
-  are reported instead of vanishing.
-- **Hardened formula engine**: lowercase references and sheet names resolve
-  case-insensitively, malformed references fail with `#REF!` instead of
-  reading an empty cell, and `WEEKNUM` is available.
-- Chart and conditional-format XLSX packages were validated with an
-  independent reader (openpyxl) as well as the in-repo round-trip suite.
+- **Calc has a real calculation engine.** A dependency graph recalculates only
+  the cells an edit can affect; dynamic arrays spill (`=SEQUENCE`, `FILTER`,
+  `SORT`, `UNIQUE`, ... report `#SPILL!` when blocked); binary operators
+  broadcast over ranges; and **pivot tables** (row/column/value fields,
+  sum/count/average/min/max) are computed live, stored in `.oswk` and exported
+  to XLSX as values with a warning.
+- **Writer is paginated.** A measured layout engine turns the document into
+  real pages at A4/A5/A3/Letter/Legal sizes with per-page headers, footers and
+  page numbers, splitting paragraphs at line boundaries and tables at row
+  boundaries with repeated header rows. Keep-with-next, keep-together and
+  page-break-before are honoured.
+- **Table of contents and navigation.** Insert/Update TOC builds entries from
+  Heading 1-6 paragraphs with page numbers and click-to-jump; the navigation
+  pane lists the outline. TOCs are saved in `.oswk` and exported (static
+  entries) to DOCX, ODT, RTF, HTML, Markdown and PDF.
+- **More statistics**: `VAR.S/P`, `STDEV.S/P`, `PERCENTILE`, `QUARTILE`,
+  `CORREL`, `COVARIANCE.P/S`.
+- Everything from 2.2.0 (editor reliability, XLSX charts and conditional
+  formatting, formula hardening) is included.
 
 ## Screenshots
 
@@ -83,6 +86,13 @@ These workflows were exercised on the built application and with automated tests
   images (insert, resize, caption, alignment); hyperlinks; page breaks; horizontal rules
 - Page setup: A4/A5/A3/Letter/Legal, portrait/landscape, Normal/Narrow/Wide/custom margins, columns
 - Headers and footers with automatic `{{page}}` / `{{pages}}` numbers (written as real fields in DOCX)
+- Paginated view with real page containers (A4/A5/A3/Letter/Legal), per-page headers and
+  footers, and a page count from the layout engine; View → Paginated/Continuous switches
+  modes, and clicking a page opens the continuous editor on that block
+- Pagination rules: widow/orphan control, keep-with-next, keep-together, page-break-before,
+  table rows split across pages with a repeated header row
+- Table of contents generated from Heading 1–6 with page numbers and click-to-jump,
+  plus a navigation pane; both share the same heading outline
 - Find & replace (case sensitive, whole word), comments sidebar, word/character/page count,
   zoom, print, export PDF with selectable text
 
@@ -106,6 +116,14 @@ These workflows were exercised on the built application and with automated tests
   data validation (list and number range), row/column insert, delete and resize
 - SVG charts fed from cell ranges (column, bar, line, pie, area) that refresh with the data
   and export to XLSX as real charts; conditional formatting exports as real `cfRule`s
+- Dependency graph with incremental recalculation (only the cells an edit can affect are
+  recalculated; volatile formulas and opaque ranges fall back to global recomputation)
+- Dynamic arrays with spill: `SEQUENCE`, `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `TRANSPOSE`
+  write into neighbouring cells, report `#SPILL!` when the target is blocked, and broadcast
+  element-wise through `+ - * / ^ & = <> < > <= >=`
+- Pivot tables (Insert → Pivot table): row/column/value fields with
+  sum/count/average/min/max, computed live, refreshed on demand, saved in `.oswk` and
+  materialised as values on XLSX export
 
 ### Impress (presentations)
 - PPTX and ODP import/export · PDF export · lossless `.oswk`
@@ -235,20 +253,21 @@ npm test
 npx tsc --noEmit
 ```
 
-241 Rust tests and 325 frontend tests pass.
+246 Rust tests and 375 frontend tests pass.
 
 - `pdfcore`: 60 unit tests plus integration suites for merge, split, page
   tools, compression, OCR, security, metadata, watermark, annotation,
   redaction, comparison and inspection
-- `officecore`: 71 unit tests (model, ZIP limits, XML, DOCX/ODT/ODS/ODP/RTF/XLSX/CSV/PPTX,
-  PDF layout, cleaner) + 8 round-trip tests against the sample documents and a
-  5-test XLSX round-trip suite (100-row golden workbook, cross-sheet formulas,
+- `officecore`: 75 unit tests (model, ZIP limits, XML, DOCX/ODT/ODS/ODP/RTF/XLSX/CSV/PPTX,
+  PDF layout, cleaner, pivot engine) + 8 round-trip tests against the sample documents
+  and a 6-test XLSX round-trip suite (100-row golden workbook, cross-sheet formulas,
   styles/merges/layout structure, validation + conditional formatting + charts,
-  and an explicit measurement of what a plain XLSX round trip drops)
+  pivot materialisation, and an explicit measurement of what a plain XLSX round trip drops)
 - `aicore`: 18 tests, `src-tauri`: 10 tests
-- Frontend: 325 tests covering the formula engine, writer runs and caret
-  logic, cell maths, i18n parity, redaction geometry and component tests that
-  drive the real Calc and Writer editors with the keyboard, with a strict
+- Frontend: 375 tests covering the formula engine (including the dependency graph,
+  incremental recalculation, spill and pivot computation), pagination rules, writer
+  runs and caret logic, cell maths, i18n parity, redaction geometry and component
+  tests that drive the real Calc and Writer editors with the keyboard, with a strict
   TypeScript type check on top
 
 The XLSX chart and conditional-format packages are also opened with an
@@ -271,14 +290,23 @@ present. A black rectangle would pass a visual check and fail this one.
 
 ## Known limitations
 
-- Writer uses a continuous page view with page-break markers; page setup, headers,
-  footers, print and the exported PDF are page-accurate, but the on-screen canvas is not
-  a full WYSIWYG pager.
+- The Writer paginated view is a layout/reading view: it renders the measured pages, but
+  clicking a page opens the continuous editor instead of typing directly in the page
+  fragments. A caret that crosses page boundaries while editing is planned for V3.0.
+- Writer has no section system in 2.5.0 (one page setup per document), no track changes
+  and no footnotes; those are V3.0 items.
+- The on-screen pagination engine and the PDF export use separate layout implementations
+  (TypeScript and Rust) that share the same rules but not the same code; the PDF export
+  does not yet read `keepWithNext` / `keepTogether`.
 - XLSX export writes values, formulas, styles, number formats, merges, column widths, row
   heights, freeze panes, data validation, conditional formatting and charts (column, bar,
   line, pie, area). XLSX import reads values and formulas only, so formatting, layout,
   validation, conditional rules and charts are not read back from an imported file; the
   native `.oswk` format keeps everything. Cell comments are exported but not imported.
+- Pivot tables are exported to XLSX as their computed values (with a warning), not as a
+  native Excel pivot cache; pivot filters exist in the model but are not in the dialog yet.
+- The table of contents is exported as static lines with the page numbers from the last
+  update in the editor; Word does not refresh them.
 - Exported charts are functional but use default styling beyond the properties the editor
   stores (title, series names/colours, legend, axis titles, data labels); Excel themes and
   fine-grained chart formatting are not written.
@@ -293,14 +321,24 @@ present. A black rectangle would pass a visual check and fail this one.
 
 ## Roadmap
 
-Planned for the next stages (V2.5 / V3.0); deliberately out of scope for 2.2.0:
+Delivered in 2.5.0: the Calc dependency graph, incremental recalculation,
+dynamic arrays with spill, pivot tables, extended statistics and the measured
+Writer pagination engine with a paginated view, table of contents and
+navigation pane.
 
-- True paginated Writer canvas with live layout
-- Track changes, footnotes and a full Writer layout engine
-- PPTX chart import/export; SmartArt and grouped-shape import
-- Pivot tables, dynamic arrays and a dependency-graph recalculation engine
-- Master slides and a presentation animation engine
-- Optional AI assistant actions for office documents (summarise, rewrite, suggest formulas)
+Planned for V3.0 (deliberately out of scope for 2.5.0):
+
+- Editing directly inside the page fragments, with a caret that crosses pages
+- Writer sections (per-section page setup, headers/footers, section breaks),
+  track changes with accept/reject, footnotes and endnotes
+- Formula autocomplete, trace-precedents/dependents auditing arrows, named
+  table objects with structured references
+- Impress master slides, PPTX chart import/export, grouped-shape hierarchy,
+  an animation model and a presenter view
+- PDF/A validation, a PDF sanitizer, annotation/form flattening, OCR
+  preprocessing (deskew/denoise/threshold) and a redaction verification report
+- AI document actions with a provider abstraction (OpenAI-compatible/Ollama)
+- Command palette and global search across documents
 
 ## License
 

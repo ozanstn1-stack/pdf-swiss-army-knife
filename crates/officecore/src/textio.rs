@@ -77,6 +77,18 @@ fn block_to_markdown(block: &Block) -> String {
         }
         Block::PageBreak => "\n---\n".into(),
         Block::Rule => "---".into(),
+        Block::Toc { entries } => entries
+            .iter()
+            .map(|entry| {
+                let indent = "  ".repeat(entry.level.saturating_sub(1) as usize);
+                if entry.page > 0 {
+                    format!("{indent}- {} .... {}", entry.text, entry.page)
+                } else {
+                    format!("{indent}- {}", entry.text)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
 }
 
@@ -248,6 +260,21 @@ fn block_html(block: &Block) -> String {
         }
         Block::PageBreak => "<div class=\"page-break\"></div>".into(),
         Block::Rule => "<hr/>".into(),
+        Block::Toc { entries } => {
+            let items = entries
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "<li class=\"toc-level-{}\">{}{}</li>",
+                        entry.level.clamp(1, 6),
+                        escape_text(&entry.text),
+                        if entry.page > 0 { format!(" <span class=\"toc-page\">{}</span>", entry.page) } else { String::new() }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            format!("<nav class=\"toc\"><ul>{items}</ul></nav>")
+        }
     }
 }
 
