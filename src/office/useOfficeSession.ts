@@ -41,6 +41,14 @@ export function extensionOf(path: string): string {
   return match ? match[1].toLowerCase() : "";
 }
 
+const DEFAULT_EXTENSION: Record<OfficeKind, string> = { writer: "docx", calc: "xlsx", impress: "pptx" };
+
+/** Suggests a file name for the save dialog when the tab has never been saved. */
+function suggestedName(tab: OfficeTab, extension: string): string {
+  const stem = (tab.title || "Untitled").replace(/[\\/:*?"<>|]/g, "-").trim() || "Untitled";
+  return `${stem}.${extension}`;
+}
+
 export function useOfficeSession(tab: OfficeTab) {
   const t = useT();
   const markSaved = useOfficeTabs((state) => state.markSaved);
@@ -52,11 +60,13 @@ export function useOfficeSession(tab: OfficeTab) {
 
   const save = useCallback(
     async (targetPath?: string): Promise<string | null> => {
+      // Ctrl+S keeps the current path; the caller that wants a new file must ask,
+      // which is why `saveAs` no longer routes through `save(undefined)`.
       let path = targetPath ?? tab.path ?? undefined;
       if (!path) {
         path = (await saveDialog({
           title: `Save ${tab.title}`,
-          defaultPath: `${tab.title}.${tab.kind === "writer" ? "docx" : tab.kind === "calc" ? "xlsx" : "pptx"}`,
+          defaultPath: suggestedName(tab, DEFAULT_EXTENSION[tab.kind]),
           filters: FILTERS[tab.kind],
         })) ?? undefined;
         if (!path) return null;
@@ -64,13 +74,13 @@ export function useOfficeSession(tab: OfficeTab) {
       setBusy(true);
       try {
         const extension = extensionOf(path);
-        if (extension === "oswk") {
-          const result = await api.saveUnit(tab.kind, tab.title, tab.model, path);
-          markSaved(tab.id, result.path);
-          notify(t("office.saved"), result.path);
-          return result.path;
-        }
-        const result = await api.saveDocument(tab.kind, tab.model, path);
+        // The native unit format carries everything the suite understands, so it
+        // is the one target where a save is a full snapshot. Every other format
+        // can drop features, which the engine reports through `warnings`.
+        const lossless = extension === "oswk";
+        const result = lossless
+          ? await api.saveUnit(tab.kind, tab.title, tab.model, path)
+          : await api.saveDocument(tab.kind, tab.model, path);
         markSaved(tab.id, result.path);
         if (result.warnings.length > 0) {
           useToasts.getState().push({ kind: "info", title: t("office.savedWithNotes"), detail: result.warnings.join(" ") });
@@ -78,6 +88,12 @@ export function useOfficeSession(tab: OfficeTab) {
           notify(t("office.saved"), result.path);
         }
         void api.historyPush(tab.id, tab.kind, tab.title, tab.model).catch(() => undefined);
+        if (!lossless && result.warnings.length > 0) {
+          // A lossy export may have dropped something the user cares about, so
+          // the recovery snapshot stays on disk until the next clean save.
+          useToasts.getState().push({ kind: "info", title: t("office.recoveryKept"), detail: t("office.recoveryKeptHint") });
+          return result.path;
+        }
         void api.recoveryDiscard(tab.id).catch(() => undefined);
         return result.path;
       } catch (error) {
@@ -90,7 +106,16 @@ export function useOfficeSession(tab: OfficeTab) {
     [markSaved, t, tab],
   );
 
-  const saveAs = useCallback(async () => save(undefined), [save]);
+  /** Always asks for a destination, even when the tab already has a path. */
+  const saveAs = useCallback(async (): Promise<string | null> => {
+    const chosen = (await saveDialog({
+      title: `Save ${tab.title} as`,
+      defaultPath: tab.path ?? suggestedName(tab, extensionOf(tab.path ?? "") || DEFAULT_EXTENSION[tab.kind]),
+      filters: FILTERS[tab.kind],
+    })) as string | null;
+    if (!chosen) return null;
+    return save(chosen);
+  }, [save, tab]);
 
   const exportPdf = useCallback(async (): Promise<string | null> => {
     const path = (await saveDialog({

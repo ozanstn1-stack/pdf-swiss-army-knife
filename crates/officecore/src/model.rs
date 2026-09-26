@@ -613,6 +613,53 @@ pub struct Cell {
     pub formula: Option<String>,
     pub style: CellStyle,
     pub comment: Option<String>,
+    /// Hyperlink target; the cell text is the label.
+    pub link: Option<String>,
+}
+
+/// Paper, orientation and print options for one sheet.
+///
+/// Mirrors the `pageSetup`/`printOptions`/`headerFooter` parts of an XLSX so a
+/// print-ready sheet survives a round trip through the native format.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PrintSettings {
+    /// Excel paper size code; 9 is A4, 1 is Letter.
+    pub paper_size: u32,
+    pub landscape: bool,
+    /// Percentage scale, 10..400.
+    pub scale: u32,
+    pub fit_to_width: u32,
+    pub fit_to_height: u32,
+    pub center_horizontally: bool,
+    pub print_gridlines: bool,
+    pub print_headings: bool,
+    /// Row number repeated at the top of every page, e.g. "1:1".
+    pub print_titles_rows: Option<String>,
+    pub different_first_page: bool,
+    pub different_odd_even: bool,
+    pub header: String,
+    pub footer: String,
+}
+
+impl Default for PrintSettings {
+    fn default() -> Self {
+        Self {
+            paper_size: 9,
+            landscape: false,
+            scale: 100,
+            fit_to_width: 1,
+            fit_to_height: 0,
+            center_horizontally: false,
+            print_gridlines: false,
+            print_headings: false,
+            print_titles_rows: None,
+            different_first_page: false,
+            different_odd_even: false,
+            header: String::new(),
+            footer: String::new(),
+        }
+    }
 }
 
 impl Cell {
@@ -716,6 +763,10 @@ pub struct Sheet {
     pub filter: Option<FilterState>,
     pub show_gridlines: bool,
     pub tab_color: Option<String>,
+    /// Print layout; kept in the native format and written to XLSX.
+    pub print: PrintSettings,
+    /// Legacy sheet-protection hash; empty means the sheet is unprotected.
+    pub sheet_protection: String,
 }
 
 impl Default for Sheet {
@@ -737,6 +788,8 @@ impl Default for Sheet {
             filter: None,
             show_gridlines: true,
             tab_color: None,
+            print: PrintSettings::default(),
+            sheet_protection: String::new(),
         }
     }
 }
@@ -778,6 +831,28 @@ impl Sheet {
     }
 }
 
+/// A workbook- or sheet-scoped defined name.
+///
+/// `definition` holds the raw target - a range (`Data!A1:A99`), a cell, a
+/// constant or a formula - so a name can point at anything a formula can
+/// express. `sheet` is `None` for a workbook-level name, which is what makes
+/// `VAT_RATE` visible from every sheet.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NamedRange {
+    pub name: String,
+    pub definition: String,
+    pub sheet: Option<String>,
+    pub comment: String,
+}
+
+impl NamedRange {
+    /// True when the name is visible from every sheet.
+    pub fn is_workbook_scope(&self) -> bool {
+        self.sheet.as_deref().map(str::trim).unwrap_or("").is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Workbook {
@@ -785,6 +860,8 @@ pub struct Workbook {
     pub title: String,
     pub sheets: Vec<Sheet>,
     pub active_sheet: usize,
+    /// Defined names, workbook-level and per-sheet.
+    pub names: Vec<NamedRange>,
     pub metadata: DocMetadata,
 }
 
@@ -795,6 +872,7 @@ impl Default for Workbook {
             title: "Untitled spreadsheet".into(),
             sheets: vec![Sheet::new("Sheet1")],
             active_sheet: 0,
+            names: Vec::new(),
             metadata: DocMetadata::default(),
         }
     }
@@ -806,6 +884,14 @@ impl Workbook {
         workbook.id = uuid::Uuid::new_v4().to_string();
         workbook.title = title.to_string();
         workbook
+    }
+
+    /// Names visible from `sheet`: workbook-level names plus that sheet's own.
+    pub fn names_for(&self, sheet: &str) -> Vec<&NamedRange> {
+        self.names
+            .iter()
+            .filter(|entry| entry.is_workbook_scope() || entry.sheet.as_deref() == Some(sheet))
+            .collect()
     }
 
     pub fn unique_sheet_name(&self, base: &str) -> String {

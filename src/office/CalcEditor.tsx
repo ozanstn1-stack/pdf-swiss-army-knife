@@ -26,6 +26,7 @@ import {
   Save,
   Sigma,
   Trash2,
+  Tag,
   Underline,
   Undo2,
   Snowflake,
@@ -34,22 +35,31 @@ import type { OfficeTab, Workbook } from "../lib/office-store";
 import { useOfficeTabs } from "../lib/office-store";
 import { useT } from "../lib/i18n";
 import { useToasts } from "../lib/store";
-import { cellText, defaultCellStyle, emptyCell, newSheet, type Cell, type CellStyle, type CellValue, type ChartData, type Sheet } from "../lib/office-types";
+import { cellText, defaultCellStyle, defaultPrintSettings, emptyCell, newSheet, type Cell, type CellStyle, type ChartData, type NamedRange, type PrintSettings, type Sheet } from "../lib/office-types";
 import {
-  ERR,
-  FormulaError,
   addressesInRange,
   columnLabel,
-  evaluateFormula,
   formatAddress,
-  formatNumber as formatNumeric,
-  isError,
   parseAddress,
   parseRange,
   type Scalar,
 } from "./calc/formula";
+import {
+  applyCellEdit,
+  applyCellEdits,
+  computeSheetValues,
+  computeWorkbookValues,
+  formatCellDisplay,
+  isBlankCell,
+  scalarToCellValue,
+  shiftFormulaRows,
+  uniqueSheetName,
+  usedRange,
+} from "./calc/cells";
 import { Dialog, Ribbon, RibbonGroup, ToolButton, ToolColor, ToolSelect } from "./office-ui";
 import { openIntoWorkspace, useEditorShortcuts, useOfficeSession } from "./useOfficeSession";
+
+export { scalarToCellValue, computeWorkbookValues, applyCellEdit, shiftFormulaRows, isBlankCell };
 
 type CalcTab = OfficeTab & { model: Workbook };
 
@@ -67,6 +77,13 @@ interface CellPosition {
   col: number;
 }
 
+interface EditingCell extends CellPosition {
+  value: string;
+}
+
+/** Where a committed edit sends the selection. */
+type CommitMove = "down" | "up" | "right" | "left" | "none";
+
 export function CalcEditor({ tab }: { tab: CalcTab }) {
   const t = useT();
   const workbook = tab.model;
@@ -75,24 +92,36 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   const [ribbon, setRibbon] = useState("home");
   const [sheetIndex, setSheetIndex] = useState(workbook.activeSheet ?? 0);
   const [selection, setSelection] = useState<Selection>({ anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } });
-  const [editing, setEditing] = useState<{ row: number; col: number; value: string } | null>(null);
+  const [editing, setEditingState] = useState<EditingCell | null>(null);
   const [formulaDraft, setFormulaDraft] = useState("");
   const [scroll, setScroll] = useState({ top: 0, left: 0, width: 900, height: 500 });
   const [chartDialog, setChartDialog] = useState(false);
   const [conditionalDialog, setConditionalDialog] = useState(false);
   const [validationDialog, setValidationDialog] = useState(false);
+  const [nameDialog, setNameDialog] = useState(false);
+  const [printDialog, setPrintDialog] = useState(false);
   const [filterOpen, setFilterOpen] = useState<{ col: number; values: Array<{ value: string; checked: boolean }> } | null>(null);
   const [undoStack, setUndoStack] = useState<Workbook[]>([]);
   const [redoStack, setRedoStack] = useState<Workbook[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const cellInputRef = useRef<HTMLInputElement>(null);
+  // The inline editor unmounts on commit, and unmounting a focused element
+  // fires `blur` - whose handler closure still sees the old `editing` value.
+  // Mirroring the state in a ref lets `commitEdit` stay idempotent, and the
+  // second flag hands keyboard focus back to the grid once the editor is gone
+  // so consecutive typing after Enter keeps working.
+  const editingRef = useRef<EditingCell | null>(null);
+  const restoreGridFocusRef = useRef(false);
+
+  const setEditing = useCallback((next: EditingCell | null) => {
+    editingRef.current = next;
+    setEditingState(next);
+  }, []);
 
   const sheet = workbook.sheets[Math.min(sheetIndex, workbook.sheets.length - 1)] ?? workbook.sheets[0];
   const activeCell = sheet.cells[formatAddress(selection.focus.row, selection.focus.col)];
   const computed = useMemo(() => computeSheetValues(workbook, sheet), [workbook, sheet]);
-
-  useEditorShortcuts(session);
 
   useEditorShortcuts(session);
 
@@ -133,36 +162,31 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   }, [selection.focus.row, selection.focus.col, activeCell]);
 
   // Focus the inline editor as soon as it opens and put the caret at the end,
-  // so fast typing never loses characters.
+  // so fast typing never loses characters. When the editor closes again the
+  // focus goes back to the grid, which is what keeps arrow keys, Tab and plain
+  // character entry alive after Enter.
   useEffect(() => {
-    if (!editing) return;
-    const input = cellInputRef.current;
-    if (!input) return;
-    input.focus();
-    const end = input.value.length;
-    try {
-      input.setSelectionRange(end, end);
-    } catch {
-      // setSelectionRange is not supported for every input type.
+    if (editing) {
+      const input = cellInputRef.current;
+      if (!input) return;
+      input.focus();
+      const end = input.value.length;
+      try {
+        input.setSelectionRange(end, end);
+      } catch {
+        // setSelectionRange is not supported for every input type.
+      }
+      return;
     }
+    if (!restoreGridFocusRef.current) return;
+    restoreGridFocusRef.current = false;
+    const grid = gridRef.current;
+    if (grid && document.activeElement !== grid) grid.focus({ preventScroll: true });
   }, [editing]);
 
   // -------------------------------------------------------------------------
   // Cell helpers
   // -------------------------------------------------------------------------
-
-  const setCell = (row: number, col: number, cell: Cell, recordUndo = true) => {
-    updateSheet((current) => {
-      const address = formatAddress(row, col);
-      const cells = { ...current.cells };
-      if (cell.value.kind === "empty" && !cell.formula && !cell.comment && JSON.stringify(cell.style) === JSON.stringify(defaultCellStyle())) {
-        delete cells[address];
-      } else {
-        cells[address] = cell;
-      }
-      return { ...current, cells, rowCount: Math.max(current.rowCount, row + 51), colCount: Math.max(current.colCount, col + 6) };
-    }, recordUndo);
-  };
 
   const setCells = (entries: Array<{ row: number; col: number; cell: Cell }>) => {
     updateSheet((current) => {
@@ -175,17 +199,53 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
     });
   };
 
-  const commitEdit = (move: "down" | "right" | "none" = "down") => {
-    if (!editing) return;
-    const { row, col, value } = editing;
-    const cell = sheet.cells[formatAddress(row, col)] ?? emptyCell();
-    const next: Cell = value.startsWith("=")
-      ? { ...cell, formula: value, value: formulaResult(value, workbook, sheet) }
-      : { ...cell, formula: null, value: parseInputValue(value) };
-    setCell(row, col, next);
-    setEditing(null);
-    if (move === "down") setSelection({ anchor: { row: row + 1, col }, focus: { row: row + 1, col } });
-    if (move === "right") setSelection({ anchor: { row, col: col + 1 }, focus: { row, col: col + 1 } });
+  /** Keeps a cell position inside the sheet and scrolls it into view. */
+  const revealCell = useCallback(
+    (position: CellPosition) => {
+      const clamped = {
+        row: Math.min(Math.max(0, position.row), Math.max(0, sheet.rowCount - 1)),
+        col: Math.min(Math.max(0, position.col), Math.max(0, sheet.colCount - 1)),
+      };
+      const grid = gridRef.current;
+      if (!grid) return clamped;
+      let left = 0;
+      for (let col = 0; col < clamped.col; col += 1) left += sheet.colWidths[String(col)] ?? DEFAULT_COL_WIDTH;
+      const width = sheet.colWidths[String(clamped.col)] ?? DEFAULT_COL_WIDTH;
+      const top = clamped.row * (sheet.rowHeights[String(clamped.row)] ?? ROW_HEIGHT);
+      const height = sheet.rowHeights[String(clamped.row)] ?? ROW_HEIGHT;
+      if (top < grid.scrollTop) grid.scrollTop = top;
+      else if (top + height > grid.scrollTop + grid.clientHeight) grid.scrollTop = top + height - grid.clientHeight;
+      if (left < grid.scrollLeft) grid.scrollLeft = Math.max(0, left);
+      else if (left + width > grid.scrollLeft + grid.clientWidth - HEADER_WIDTH) {
+        grid.scrollLeft = left + width - grid.clientWidth + HEADER_WIDTH;
+      }
+      return clamped;
+    },
+    [sheet],
+  );
+
+  const commitEdit = (move: CommitMove = "down") => {
+    // Read through the ref: the blur handler triggered by unmounting the editor
+    // would otherwise commit the same value a second time.
+    const current = editingRef.current;
+    if (!current) return;
+    editingRef.current = null;
+    setEditingState(null);
+    restoreGridFocusRef.current = true;
+
+    const { row, col, value } = current;
+    update((current_workbook) => applyCellEdit(current_workbook, sheetIndex, row, col, value));
+
+    if (move === "none") return;
+    const delta: Record<Exclude<CommitMove, "none">, CellPosition> = {
+      down: { row: 1, col: 0 },
+      up: { row: -1, col: 0 },
+      right: { row: 0, col: 1 },
+      left: { row: 0, col: -1 },
+    };
+    const step = delta[move];
+    const next = revealCell({ row: row + step.row, col: col + step.col });
+    setSelection({ anchor: next, focus: next });
   };
 
   const applyStyle = (patch: Partial<CellStyle>) => {
@@ -262,16 +322,7 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
   };
 
   const applyPasted = (rows: string[][]) => {
-    const entries: Array<{ row: number; col: number; cell: Cell }> = [];
-    rows.forEach((line, rowOffset) => {
-      line.forEach((value, colOffset) => {
-        const row = selection.focus.row + rowOffset;
-        const col = selection.focus.col + colOffset;
-        const cell = sheet.cells[formatAddress(row, col)] ?? emptyCell();
-        entries.push({ row, col, cell: { ...cell, formula: value.startsWith("=") ? value : null, value: value.startsWith("=") ? formulaResult(value, workbook, sheet) : parseInputValue(value) } });
-      });
-    });
-    setCells(entries);
+    update((current) => applyCellEdits(current, sheetIndex, selection.focus, rows));
   };
 
   // -------------------------------------------------------------------------
@@ -282,10 +333,15 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
     // Keys typed inside the inline editor belong to the editor only.
     if ((event.target as HTMLElement).closest("input, textarea, [contenteditable=true]")) return;
     const { row, col } = selection.focus;
+    const mod = event.ctrlKey || event.metaKey;
     const move = (dRow: number, dCol: number, extend = false) => {
       event.preventDefault();
-      const next = { row: Math.max(0, row + dRow), col: Math.max(0, col + dCol) };
+      const next = revealCell({ row: row + dRow, col: col + dCol });
       setSelection(extend ? { anchor: selection.anchor, focus: next } : { anchor: next, focus: next });
+    };
+    const openEditor = (value?: string) => {
+      event.preventDefault();
+      setEditing({ row, col, value: value ?? activeCell?.formula ?? cellText(activeCell) });
     };
     if (editing) return;
     switch (event.key) {
@@ -301,51 +357,125 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
       case "ArrowRight":
         move(0, 1, event.shiftKey);
         break;
+      case "Home":
+        event.preventDefault();
+        if (mod) {
+          const next = revealCell({ row: 0, col: 0 });
+          setSelection({ anchor: next, focus: next });
+        } else {
+          const next = revealCell({ row, col: 0 });
+          setSelection(event.shiftKey ? { anchor: selection.anchor, focus: next } : { anchor: next, focus: next });
+        }
+        break;
+      case "End": {
+        event.preventDefault();
+        const next = mod ? revealCell({ row: lastRow, col: lastCol }) : revealCell({ row, col: lastCol });
+        setSelection(event.shiftKey ? { anchor: selection.anchor, focus: next } : { anchor: next, focus: next });
+        break;
+      }
+      case "PageDown":
+        move(pageSize, 0, event.shiftKey);
+        break;
+      case "PageUp":
+        move(-pageSize, 0, event.shiftKey);
+        break;
       case "Tab":
         event.preventDefault();
         move(0, event.shiftKey ? -1 : 1);
         break;
       case "Enter":
-        event.preventDefault();
-        setEditing({ row, col, value: activeCell?.formula ?? cellText(activeCell) });
+        // Enter opens the cell editor; Shift+Enter and Ctrl+Enter commit the
+        // current value and step to the previous / next row.
+        if (mod || event.shiftKey) {
+          event.preventDefault();
+          commitEdit(event.shiftKey ? "up" : "down");
+        } else {
+          openEditor();
+        }
         break;
       case "F2":
-        event.preventDefault();
-        setEditing({ row, col, value: activeCell?.formula ?? cellText(activeCell) });
+        openEditor();
         break;
       case "Delete":
       case "Backspace":
+        event.preventDefault();
         clearSelection();
         break;
       case "Escape":
         setEditing(null);
         break;
+      case " ":
+        // Space selects the whole column, or the whole sheet when a full column
+        // is already selected.
+        event.preventDefault();
+        if (row === 0 && selection.focus.row === lastRow) {
+          setSelection({ anchor: { row: 0, col: 0 }, focus: { row: lastRow, col: lastCol } });
+        } else {
+          setSelection({ anchor: { row: 0, col }, focus: { row: lastRow, col } });
+        }
+        break;
+      case "a":
+      case "A":
+        if (mod) {
+          event.preventDefault();
+          setSelection({ anchor: { row: 0, col: 0 }, focus: { row: lastRow, col: lastCol } });
+        }
+        break;
+      case "d":
+      case "D":
+        if (mod) {
+          event.preventDefault();
+          fillFromSelection();
+        }
+        break;
+      case "b":
+      case "B":
+        if (mod) {
+          event.preventDefault();
+          applyStyle({ bold: !activeCell?.style.bold });
+        }
+        break;
+      case "i":
+      case "I":
+        if (mod) {
+          event.preventDefault();
+          applyStyle({ italic: !activeCell?.style.italic });
+        }
+        break;
       case "c":
-        if (event.ctrlKey || event.metaKey) {
+        if (mod) {
           event.preventDefault();
           copySelection();
         }
         break;
       case "v":
-        if (event.ctrlKey || event.metaKey) {
+        if (mod) {
           event.preventDefault();
           void pasteAtSelection();
         }
         break;
-      case "z":
-        if (event.ctrlKey || event.metaKey) {
+      case "x":
+        if (mod) {
           event.preventDefault();
-          undo();
+          copySelection();
+          clearSelection();
+        }
+        break;
+      case "z":
+        if (mod) {
+          event.preventDefault();
+          if (event.shiftKey) redo();
+          else undo();
         }
         break;
       case "y":
-        if (event.ctrlKey || event.metaKey) {
+        if (mod) {
           event.preventDefault();
           redo();
         }
         break;
       default:
-        if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
+        if (!mod && !event.altKey && event.key.length === 1) {
           event.preventDefault();
           setEditing({ row, col, value: event.key });
         }
@@ -565,6 +695,30 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
 
   const nameBox = `${formatAddress(selection.focus.row, selection.focus.col)}${selection.anchor.row !== selection.focus.row || selection.anchor.col !== selection.focus.col ? `:${formatAddress(selection.anchor.row, selection.anchor.col)}` : ""}`;
 
+  // The last valid row/column, used for Ctrl+End, Space and the data extent.
+  const lastRow = Math.max(0, sheet.rowCount - 1);
+  const lastCol = Math.max(0, sheet.colCount - 1);
+  const pageSize = Math.max(1, Math.floor(scroll.height / ROW_HEIGHT) - 1);
+
+  /** Ctrl+D: copy the first row of the selection down the rest of it. */
+  const fillFromSelection = () => {
+    const bounds = selectionBounds;
+    if (bounds.start.row === bounds.end.row && bounds.start.col === bounds.end.col) return;
+    const source: Cell[] = [];
+    for (let col = bounds.start.col; col <= bounds.end.col; col += 1) {
+      source.push(sheet.cells[formatAddress(bounds.start.row, col)] ?? emptyCell());
+    }
+    const entries: Array<{ row: number; col: number; cell: Cell }> = [];
+    for (let row = bounds.start.row + 1; row <= bounds.end.row; row += 1) {
+      source.forEach((cell, offset) => {
+        const col = bounds.start.col + offset;
+        entries.push({ row, col, cell: { ...cell, formula: shiftFormulaRows(cell.formula, row - bounds.start.row) } });
+      });
+    }
+    if (entries.length === 0) return;
+    setCells(entries);
+  };
+
   return (
     <div className="editor calc-editor">
       <Ribbon
@@ -657,6 +811,12 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
               <ToolButton icon={<Plus size={16} />} label={t("calc.insertColumn")} onClick={() => insertColumn(sheet, selection.focus.col, updateSheet)} />
               <ToolButton icon={<Minus size={16} />} label={t("calc.deleteColumn")} onClick={() => deleteColumn(sheet, selection.focus.col, updateSheet)} />
             </RibbonGroup>
+            <RibbonGroup label={t("calc.names")}>
+              <ToolButton icon={<Tag size={16} />} label={t("calc.nameManager")} onClick={() => setNameDialog(true)} />
+            </RibbonGroup>
+            <RibbonGroup label={t("calc.printLayout")}>
+              <ToolButton icon={<Printer size={16} />} label={t("calc.printSetup")} onClick={() => setPrintDialog(true)} />
+            </RibbonGroup>
           </>
         ) : null}
 
@@ -693,14 +853,31 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
           placeholder={t("calc.formulaHint")}
           onChange={(event) => {
             setFormulaDraft(event.target.value);
-            if (editing) setEditing({ ...editing, value: event.target.value });
+            // Read through the ref so the draft and the open editor can never
+            // disagree about the current text.
+            const current = editingRef.current;
+            if (current) setEditing({ row: current.row, col: current.col, value: event.target.value });
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
-              if (!editing) setEditing({ row: selection.focus.row, col: selection.focus.col, value: formulaDraft });
-              else commitEdit("down");
+              event.preventDefault();
+              if (editing) {
+                commitEdit(event.shiftKey ? "up" : "down");
+              } else {
+                // Typing straight into the formula bar and pressing Enter has to
+                // commit the draft, not open the cell editor with a stale value.
+                setEditing({ row: selection.focus.row, col: selection.focus.col, value: formulaDraft });
+                commitEdit(event.shiftKey ? "up" : "down");
+              }
+              restoreGridFocusRef.current = true;
+            }
+            if (event.key === "Tab") {
+              event.preventDefault();
+              if (editing) commitEdit(event.shiftKey ? "left" : "right");
             }
             if (event.key === "Escape") {
+              event.preventDefault();
+              restoreGridFocusRef.current = true;
               setEditing(null);
               setFormulaDraft(activeCell?.formula ?? cellText(activeCell));
             }
@@ -800,14 +977,19 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
                           onChange={(event) => setEditing({ row, col, value: event.target.value })}
                           onBlur={() => commitEdit("none")}
                           onKeyDown={(event) => {
-                            if (event.key === "Enter") commitEdit("down");
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              commitEdit(event.shiftKey ? "up" : "down");
+                            }
                             if (event.key === "Tab") {
                               event.preventDefault();
-                              commitEdit("right");
+                              commitEdit(event.shiftKey ? "left" : "right");
                             }
                             if (event.key === "Escape") {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              restoreGridFocusRef.current = true;
                               setEditing(null);
-                              window.setTimeout(() => gridRef.current?.focus(), 0);
                             }
                           }}
                         />
@@ -903,6 +1085,31 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
         <ValidationDialog onClose={() => setValidationDialog(false)} onApply={addValidation} />
       ) : null}
 
+      {nameDialog ? (
+        <NameManagerDialog
+          names={workbook.names ?? []}
+          currentSheet={sheet.name}
+          selection={`${formatAddress(selection.anchor.row, selection.anchor.col)}:${formatAddress(selection.focus.row, selection.focus.col)}`}
+          onClose={() => setNameDialog(false)}
+          onChange={(names) => {
+            update((current) => ({ ...current, names }));
+            setNameDialog(false);
+          }}
+        />
+      ) : null}
+
+      {printDialog ? (
+        <PrintLayoutDialog
+          print={sheet.print ?? defaultPrintSettings()}
+          sheetName={sheet.name}
+          onClose={() => setPrintDialog(false)}
+          onApply={(print) => {
+            updateSheet((current) => ({ ...current, print }));
+            setPrintDialog(false);
+          }}
+        />
+      ) : null}
+
       {filterOpen ? (
         <Dialog title={t("calc.filter")} onClose={() => setFilterOpen(null)}>
           <div className="stack filter-list">
@@ -950,123 +1157,6 @@ export function CalcEditor({ tab }: { tab: CalcTab }) {
 // ---------------------------------------------------------------------------
 // Derived data
 // ---------------------------------------------------------------------------
-
-function cellValueToScalar(value: CellValue): Scalar {
-  switch (value.kind) {
-    case "number":
-      return value.value;
-    case "text":
-      return value.value;
-    case "bool":
-      return value.value;
-    case "error":
-      return new FormulaError(value.value);
-    default:
-      return "";
-  }
-}
-
-export function scalarToCellValue(value: Scalar): CellValue {
-  if (isError(value)) return { kind: "error", value: value.code };
-  if (typeof value === "number") return { kind: "number", value };
-  if (typeof value === "boolean") return { kind: "bool", value };
-  return { kind: "text", value: String(value) };
-}
-
-function parseInputValue(text: string): CellValue {
-  const trimmed = text.trim();
-  if (trimmed === "") return { kind: "empty" };
-  if (/^-?\d+([.,]\d+)?$/.test(trimmed)) {
-    const numeric = Number(trimmed.replace(",", "."));
-    if (Number.isFinite(numeric)) return { kind: "number", value: numeric };
-  }
-  if (/^(true|false)$/i.test(trimmed)) return { kind: "bool", value: trimmed.toLowerCase() === "true" };
-  if (/^#(REF|VALUE|NAME|DIV\/0|N\/A|NUM)/i.test(trimmed)) return { kind: "error", value: trimmed.toUpperCase() };
-  return { kind: "text", value: text };
-}
-
-/** Evaluates every formula cell of the workbook with cycle protection. */
-export function computeWorkbookValues(workbook: Workbook): Map<string, Scalar> {
-  const cache = new Map<string, Scalar>();
-  const resolving = new Set<string>();
-  const sheetNames = workbook.sheets.map((candidate) => candidate.name);
-
-  const getValue = (sheetName: string | null, address: string): Scalar => {
-    const name = sheetName ?? sheetNames[0] ?? "";
-    const key = `${name}!${address}`;
-    const cached = cache.get(key);
-    if (cached !== undefined) return cached;
-    const target = workbook.sheets.find((candidate) => candidate.name === name);
-    if (!target) return ERR.ref();
-    const cell = target.cells[address];
-    if (!cell) return "";
-    if (cell.formula) {
-      if (resolving.has(key)) return ERR.circular();
-      resolving.add(key);
-      cache.set(key, "");
-      const result = evaluateFormula(cell.formula, { getValue, sheetNames, currentSheet: name });
-      resolving.delete(key);
-      cache.set(key, result);
-      return result;
-    }
-    const scalar = cellValueToScalar(cell.value);
-    cache.set(key, scalar);
-    return scalar;
-  };
-
-  for (const candidate of workbook.sheets) {
-    for (const address of Object.keys(candidate.cells)) {
-      getValue(candidate.name, address);
-    }
-  }
-  return cache;
-}
-
-/** Values of one sheet keyed by bare address (for display). */
-export function computeSheetValues(workbook: Workbook, sheet: Sheet): Map<string, Scalar> {
-  const prefixed = computeWorkbookValues(workbook);
-  const out = new Map<string, Scalar>();
-  const prefix = `${sheet.name}!`;
-  for (const [key, value] of prefixed) {
-    if (key.startsWith(prefix)) out.set(key.slice(prefix.length), value);
-  }
-  return out;
-}
-
-function formulaResult(formula: string, workbook: Workbook, sheet: Sheet): CellValue {
-  const values = computeWorkbookValues(workbook);
-  const result = evaluateFormula(formula, {
-    getValue: (sheetName, address) => values.get(`${sheetName ?? sheet.name}!${address}`) ?? "",
-    sheetNames: workbook.sheets.map((candidate) => candidate.name),
-    currentSheet: sheet.name,
-  });
-  return scalarToCellValue(result);
-}
-
-function formatCellDisplay(value: Scalar, style: CellStyle): string {
-  if (isError(value)) return value.code;
-  if (typeof value === "number") return formatNumeric(value, style.numberFormat || "General");
-  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
-  return String(value ?? "");
-}
-
-function usedRange(sheet: Sheet): string {
-  let maxRow = 0;
-  let maxCol = 0;
-  for (const address of Object.keys(sheet.cells)) {
-    const position = parseAddress(address);
-    if (!position) continue;
-    maxRow = Math.max(maxRow, position.row);
-    maxCol = Math.max(maxCol, position.col);
-  }
-  return `A1:${formatAddress(Math.max(0, maxRow), Math.max(0, maxCol))}`;
-}
-
-function uniqueSheetName(workbook: Workbook, base: string): string {
-  let index = 1;
-  while (workbook.sheets.some((sheet) => sheet.name === (index === 1 ? base : `${base}${index}`))) index += 1;
-  return index === 1 ? base : `${base}${index}`;
-}
 
 function conditionalFill(sheet: Sheet, address: string, value: Scalar, all: Map<string, Scalar>): string | null {
   for (const rule of sheet.conditional) {
@@ -1421,4 +1511,206 @@ function ValidationDialog({ onClose, onApply }: { onClose: () => void; onApply: 
   );
 }
 
-export { formatNumeric };
+/**
+ * Workbook- and sheet-scoped name manager.
+ *
+ * A name points at a range, a cell, a constant or a formula; the "this sheet
+ * only" checkbox decides whether other sheets can see it. The scope rules match
+ * what the formula evaluator does, so what is listed here is what resolves.
+ */
+function NameManagerDialog({
+  names,
+  currentSheet,
+  selection,
+  onClose,
+  onChange,
+}: {
+  names: NamedRange[];
+  currentSheet: string;
+  selection: string;
+  onClose: () => void;
+  onChange: (names: NamedRange[]) => void;
+}) {
+  const t = useT();
+  const [entryName, setEntryName] = useState("");
+  const [entryTarget, setEntryTarget] = useState(selection);
+  const [entryScope, setEntryScope] = useState<"workbook" | "sheet">("workbook");
+
+  const problem = entryName.trim() === "" ? t("calc.nameRequired") : !isValidDefinedName(entryName.trim()) ? t("calc.nameInvalid") : "";
+
+  const save = () => {
+    if (problem) return;
+    const definition = entryTarget.trim();
+    const next: NamedRange = {
+      name: entryName.trim().toUpperCase(),
+      definition,
+      sheet: entryScope === "sheet" ? currentSheet : null,
+    };
+    // Replace an existing name with the same identifier and scope.
+    const without = names.filter((entry) => !(entry.name === next.name && entry.sheet === next.sheet));
+    onChange([...without, next]);
+  };
+
+  return (
+    <Dialog title={t("calc.nameManager")} onClose={onClose} wide>
+      <div className="stack">
+        <div className="row wrap" style={{ gap: 8 }}>
+          <input className="input" value={entryName} placeholder={t("calc.namePlaceholder")} onChange={(event) => setEntryName(event.target.value)} />
+          <input className="input" value={entryTarget} placeholder={t("calc.nameTarget")} onChange={(event) => setEntryTarget(event.target.value)} />
+          <label className="check">
+            <input type="checkbox" checked={entryScope === "sheet"} onChange={(event) => setEntryScope(event.target.checked ? "sheet" : "workbook")} />
+            {t("calc.nameThisSheetOnly")}
+          </label>
+          <button type="button" className="btn btn-primary" onClick={save} disabled={problem !== ""}>
+            {t("common.add")}
+          </button>
+        </div>
+        {problem ? <p className="muted small">{problem}</p> : null}
+
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>{t("calc.nameColumn")}</th>
+              <th>{t("calc.nameTarget")}</th>
+              <th>{t("calc.nameScope")}</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {names.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="muted">
+                  {t("calc.noNames")}
+                </td>
+              </tr>
+            ) : null}
+            {names.map((entry) => (
+              <tr key={`${entry.sheet ?? ""}:${entry.name}`}>
+                <td>
+                  <input
+                    className="input"
+                    defaultValue={entry.name}
+                    onBlur={(event) => {
+                      const next = event.target.value.trim().toUpperCase();
+                      if (!isValidDefinedName(next) || next === entry.name) return;
+                      onChange(names.map((candidate) => (candidate === entry ? { ...candidate, name: next } : candidate)));
+                    }}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="input"
+                    defaultValue={entry.definition}
+                    onBlur={(event) => onChange(names.map((candidate) => (candidate === entry ? { ...candidate, definition: event.target.value.trim() } : candidate)))}
+                  />
+                </td>
+                <td className="muted">{entry.sheet ?? t("calc.nameWorkbookScope")}</td>
+                <td>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label={t("common.remove")}
+                    onClick={() => onChange(names.filter((candidate) => candidate !== entry))}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Dialog>
+  );
+}
+
+/**
+ * Excel's rule for a legal name: it must start with a letter or underscore,
+ * may contain letters, digits, dots and underscores, and must not look like a
+ * cell reference (otherwise the formula parser reads `A1` as a cell).
+ */
+export function isValidDefinedName(name: string): boolean {
+  if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(name)) return false;
+  return parseAddress(name) === null;
+}
+
+/** Paper, orientation, scaling and header/footer for printing and PDF export. */
+function PrintLayoutDialog({
+  print,
+  sheetName,
+  onClose,
+  onApply,
+}: {
+  print: PrintSettings;
+  sheetName: string;
+  onClose: () => void;
+  onApply: (print: PrintSettings) => void;
+}) {
+  const t = useT();
+  const [draft, setDraft] = useState<PrintSettings>({ ...print });
+  const patch = (next: Partial<PrintSettings>) => setDraft((current) => ({ ...current, ...next }));
+
+  return (
+    <Dialog title={t("calc.printSetup")} onClose={onClose} wide>
+      <div className="stack">
+        <label className="field">
+          <span>{t("calc.paperSize")}</span>
+          <select className="input" value={draft.paperSize} onChange={(event) => patch({ paperSize: Number(event.target.value) })}>
+            <option value={9}>A4</option>
+            <option value={1}>Letter</option>
+            <option value={5}>Legal</option>
+            <option value={8}>A3</option>
+            <option value={9}>A4</option>
+            <option value={11}>A5</option>
+          </select>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={draft.landscape} onChange={(event) => patch({ landscape: event.target.checked })} />
+          {t("calc.landscape")}
+        </label>
+        <label className="field">
+          <span>{t("calc.scale")}</span>
+          <input className="input" type="number" min={10} max={400} value={draft.scale} onChange={(event) => patch({ scale: Math.min(400, Math.max(10, Number(event.target.value) || 100)) })} />
+        </label>
+        <label className="field">
+          <span>{t("calc.fitToWidth")}</span>
+          <input className="input" type="number" min={0} max={10} value={draft.fitToWidth} onChange={(event) => patch({ fitToWidth: Math.max(0, Number(event.target.value) || 0) })} />
+        </label>
+        <label className="field">
+          <span>{t("calc.printTitlesRows")}</span>
+          <input
+            className="input"
+            placeholder="1:1"
+            value={draft.printTitlesRows ?? ""}
+            onChange={(event) => patch({ printTitlesRows: event.target.value.trim() === "" ? null : event.target.value.trim() })}
+          />
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={draft.printGridlines} onChange={(event) => patch({ printGridlines: event.target.checked })} />
+          {t("calc.printGridlines")}
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={draft.printHeadings} onChange={(event) => patch({ printHeadings: event.target.checked })} />
+          {t("calc.printHeadings")}
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={draft.centerHorizontally} onChange={(event) => patch({ centerHorizontally: event.target.checked })} />
+          {t("calc.centerHorizontally")}
+        </label>
+        <label className="field">
+          <span>{t("calc.header")}</span>
+          <input className="input" value={draft.header} onChange={(event) => patch({ header: event.target.value })} />
+        </label>
+        <p className="muted small">{t("calc.printSheetNote", { sheet: sheetName })}</p>
+      </div>
+      <div className="row" style={{ justifyContent: "flex-end", marginTop: 14 }}>
+        <button type="button" className="btn btn-soft" onClick={onClose}>
+          {t("common.cancel")}
+        </button>
+        <button type="button" className="btn btn-primary" onClick={() => onApply(draft)}>
+          {t("common.apply")}
+        </button>
+      </div>
+    </Dialog>
+  );
+}

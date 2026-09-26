@@ -88,6 +88,7 @@ fn workbook() -> Workbook {
             formula: None,
             style: CellStyle { bold: true, fill: Some("#EEF2FF".into()), ..Default::default() },
             comment: None,
+            link: None,
         });
     }
     for row in 1..=100u32 {

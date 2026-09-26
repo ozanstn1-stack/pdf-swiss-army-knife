@@ -200,6 +200,13 @@ export interface Cell {
   formula: string | null;
   style: CellStyle;
   comment: string | null;
+  /**
+   * Hyperlink target; the cell text is the label.
+   *
+   * Optional because the Rust model defaults it, so a document written by an
+   * older build simply has no `link` key.
+   */
+  link?: string | null;
 }
 
 export interface MergeRange {
@@ -278,6 +285,62 @@ export interface Sheet {
   filter: FilterState | null;
   showGridlines: boolean;
   tabColor: string | null;
+  print: PrintSettings;
+  /** Legacy sheet-protection hash; empty means the sheet is unprotected. */
+  sheetProtection: string;
+}
+
+/** Paper, orientation and print options; mirrors the Rust `PrintSettings`. */
+export interface PrintSettings {
+  /** Excel paper size code; 9 is A4, 1 is Letter. */
+  paperSize: number;
+  landscape: boolean;
+  /** Percentage scale, 10..400. */
+  scale: number;
+  fitToWidth: number;
+  fitToHeight: number;
+  centerHorizontally: boolean;
+  printGridlines: boolean;
+  printHeadings: boolean;
+  /** Row range repeated at the top of every page, e.g. "1:1". */
+  printTitlesRows: string | null;
+  differentFirstPage: boolean;
+  differentOddEven: boolean;
+  header: string;
+  footer: string;
+}
+
+export function defaultPrintSettings(): PrintSettings {
+  return {
+    paperSize: 9,
+    landscape: false,
+    scale: 100,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    centerHorizontally: false,
+    printGridlines: false,
+    printHeadings: false,
+    printTitlesRows: null,
+    differentFirstPage: false,
+    differentOddEven: false,
+    header: "",
+    footer: "",
+  };
+}
+
+/**
+ * A workbook- or sheet-scoped defined name.
+ *
+ * `definition` holds the raw target - a range (`Data!A1:A99`), a cell, a
+ * constant or a formula - so a name can point at anything a formula can
+ * express. `sheet` is null for a workbook-level name, which is what makes
+ * `VAT_RATE` visible from every sheet.
+ */
+export interface NamedRange {
+  name: string;
+  definition: string;
+  sheet: string | null;
+  comment?: string;
 }
 
 export interface Workbook {
@@ -285,6 +348,8 @@ export interface Workbook {
   title: string;
   sheets: Sheet[];
   activeSheet: number;
+  /** Defined names, workbook-level and per-sheet. */
+  names: NamedRange[];
   metadata: DocMetadata;
 }
 
@@ -525,7 +590,7 @@ export function defaultCellStyle(): CellStyle {
 }
 
 export function emptyCell(): Cell {
-  return { value: { kind: "empty" }, formula: null, style: defaultCellStyle(), comment: null };
+  return { value: { kind: "empty" }, formula: null, style: defaultCellStyle(), comment: null, link: null };
 }
 
 export function cellText(cell: Cell | undefined): string {
@@ -563,6 +628,8 @@ export function newSheet(name: string): Sheet {
     filter: null,
     showGridlines: true,
     tabColor: null,
+    print: defaultPrintSettings(),
+    sheetProtection: "",
   };
 }
 
@@ -572,6 +639,7 @@ export function newWorkbook(title = "Untitled spreadsheet"): Workbook {
     title,
     sheets: [newSheet("Sheet1")],
     activeSheet: 0,
+    names: [],
     metadata: { ...emptyMetadata(), title },
   };
 }

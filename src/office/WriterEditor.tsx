@@ -50,8 +50,33 @@ import { uid, wordCount, type Block, type DocComment, type ImageData, type ParaP
 import { defaultPageSetup, defaultParaProps, emptyMetadata, newParaBlock, newTextDocument } from "../lib/office-types";
 import { Dialog, Ribbon, RibbonGroup, ToolButton, ToolColor, ToolNumber, ToolSelect, useTablePicker } from "./office-ui";
 import { openIntoWorkspace, useEditorShortcuts, useOfficeSession } from "./useOfficeSession";
+import {
+  insertText,
+  joinRuns,
+  nextListLevel,
+  nextParagraphProps,
+  replaceRange,
+  runsText,
+  splitAtLineBreak,
+  splitRuns,
+  wordRangeAt,
+} from "./writer/runs";
+import { caretOffset, caretOnFirstLine, caretOnLastLine, selectedRange, setCaretOffset } from "./writer/caret";
+import { domToRuns, runsToHtml, wrapCellRuns } from "./writer/writerDom";
+import { emptyRun as emptyWriterRun } from "./writer/runs";
+
+export { runsToHtml, domToRuns };
 
 type WriterTab = OfficeTab & { model: TextDocument };
+
+/** Structural edits the paragraph component asks the document to perform. */
+type StructureAction =
+  | { kind: "replace"; index: number; block: Block }
+  | { kind: "split"; index: number; offset: number; to: number }
+  | { kind: "mergeBackward"; index: number }
+  | { kind: "mergeForward"; index: number }
+  | { kind: "indent" | "outdent"; index: number }
+  | { kind: "moveCaret"; index: number; delta: number; atLine: "start" | "end" };
 
 interface SelectionInfo {
   paragraph: ParaProps;
@@ -78,6 +103,9 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
   const [selectedImage, setSelectedImage] = useState<number | null>(null);
   const [pages, setPages] = useState(1);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Caret the model wants placed after a structural edit, consumed by the
+  // paragraph effect once React has re-rendered it.
+  const caretRequest = useRef<{ index: number; offset: number } | null>(null);
   const picker = useTablePicker();
 
   const document = tab.model;
@@ -392,6 +420,104 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
   };
 
   // -------------------------------------------------------------------------
+  // Structural editing (Enter / Backspace / Tab / arrow keys at an edge)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Applies a structural edit to the block list.
+   *
+   * Every branch works on a copy of the model and writes the caret position
+   * back through `caretRequest`, because React re-renders the paragraph after
+   * the model changes and the browser caret would otherwise be lost.
+   */
+  const handleStructure = (action: StructureAction, scope: "body" | "header" | "footer" | "cell") => {
+    if (scope === "cell") return; // cell editing keeps the simple single-paragraph model
+    const blocks = [...currentBlocks()];
+    const block = blocks[action.index];
+    if (!block) return;
+    const paragraph = block.type === "paragraph" ? block : null;
+
+    const focusParagraph = (index: number, offset: number) => {
+      caretRequest.current = { index, offset };
+      window.setTimeout(() => {
+        const target = window.document.querySelector<HTMLElement>(`[data-scope="${scope}"][data-block-index="${index}"]`);
+        if (!target) return;
+        target.focus();
+        setCaretOffset(target, offset);
+      }, 0);
+    };
+
+    switch (action.kind) {
+      case "replace": {
+        blocks[action.index] = action.block;
+        withBlocks(blocks);
+        return;
+      }
+      case "split": {
+        if (!paragraph) return;
+        const [left, right] = splitRuns(paragraph.runs, action.offset);
+        const tail = replaceRange(right, 0, Math.max(0, action.to - action.offset), "");
+        const headText = runsText(left);
+        blocks[action.index] = { ...paragraph, runs: left };
+        blocks.splice(action.index + 1, 0, { type: "paragraph", props: nextParagraphProps(paragraph.props, headText), runs: tail });
+        withBlocks(blocks);
+        focusParagraph(action.index + 1, 0);
+        return;
+      }
+      case "mergeBackward": {
+        if (action.index === 0) return;
+        const previous = blocks[action.index - 1];
+        if (previous.type !== "paragraph" || !paragraph) {
+          // A table, image or rule has no text to merge into: outdent a list
+          // item instead, which is what every word processor does.
+          if (paragraph?.props.list) {
+            blocks[action.index] = { ...paragraph, props: nextListLevel(paragraph.props, -1) };
+            withBlocks(blocks);
+          }
+          return;
+        }
+        const caret = runsText(previous.runs).length;
+        blocks[action.index - 1] = { ...previous, runs: joinRuns(previous.runs, paragraph.runs) };
+        blocks.splice(action.index, 1);
+        withBlocks(blocks);
+        focusParagraph(action.index - 1, caret);
+        return;
+      }
+      case "mergeForward": {
+        const next = blocks[action.index + 1];
+        if (!paragraph || !next) return;
+        if (next.type !== "paragraph") {
+          blocks.splice(action.index + 1, 1);
+          withBlocks(blocks);
+          return;
+        }
+        const caret = runsText(paragraph.runs).length;
+        blocks[action.index] = { ...paragraph, runs: joinRuns(paragraph.runs, next.runs) };
+        blocks.splice(action.index + 1, 1);
+        withBlocks(blocks);
+        focusParagraph(action.index, caret);
+        return;
+      }
+      case "indent":
+      case "outdent": {
+        if (!paragraph) return;
+        const delta = action.kind === "indent" ? 1 : -1;
+        const next = paragraph.props.list ? nextListLevel(paragraph.props, delta) : { ...paragraph.props, indentLeftPt: Math.max(0, paragraph.props.indentLeftPt + delta * 24) };
+        blocks[action.index] = { ...paragraph, props: next };
+        withBlocks(blocks);
+        return;
+      }
+      case "moveCaret": {
+        const target = blocks[action.index + action.delta];
+        if (!target || target.type !== "paragraph") return;
+        const at = action.delta < 0 ? (action.atLine === "start" ? 0 : runsText(target.runs).length) : action.atLine === "end" ? runsText(target.runs).length : 0;
+        focusParagraph(action.index + action.delta, at);
+        return;
+      }
+    }
+  };
+
+  // -------------------------------------------------------------------------
   // Find / replace
   // -------------------------------------------------------------------------
 
@@ -559,6 +685,7 @@ export function WriterEditor({ tab }: { tab: WriterTab }) {
           }}
           onUpdate={(next) => updateBlock(index, next)}
           onSyncCell={(path, element) => syncCell(path[0], path[1], path[2], element)}
+          onStructure={(action) => handleStructure(action, scope)}
         />
       ))}
     </>
@@ -896,6 +1023,7 @@ function BlockView({
   onSync,
   onUpdate,
   onSyncCell,
+  onStructure,
 }: {
   block: Block;
   index: number;
@@ -907,6 +1035,7 @@ function BlockView({
   onSync: (element: HTMLElement) => void;
   onUpdate: (block: Block) => void;
   onSyncCell: (path: [number, number, number], element: HTMLElement) => void;
+  onStructure: (action: StructureAction) => void;
 }) {
   if (block.type === "paragraph") {
     return (
@@ -918,6 +1047,7 @@ function BlockView({
         onFocus={() => onFocusParagraph(block)}
         onSync={onSync}
         onUpdate={onUpdate}
+        onStructure={onStructure}
       />
     );
   }
@@ -947,6 +1077,13 @@ function BlockView({
   return <hr className="writer-rule" />;
 }
 
+/**
+ * One editable paragraph.
+ *
+ * Normal typing is left to the browser. The keys that change the *structure* of
+ * the document are intercepted here and reported upwards, because the model -
+ * not the DOM - is the source of truth that DOCX/ODT export and PDF layout read.
+ */
 function ParagraphView({
   block,
   index,
@@ -954,7 +1091,7 @@ function ParagraphView({
   zoom,
   onFocus,
   onSync,
-  
+  onStructure,
 }: {
   block: Extract<Block, { type: "paragraph" }>;
   index: number;
@@ -963,20 +1100,135 @@ function ParagraphView({
   onFocus: () => void;
   onSync: (element: HTMLElement) => void;
   onUpdate: (block: Block) => void;
+  onStructure: (action: StructureAction) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
   const props = block.props;
+  // Caret to restore after a structural change, consumed by the effect below.
+  const pendingCaret = useRef<number | null>(null);
 
   useEffect(() => {
-    if (focused || !ref.current) return;
+    if (!ref.current) return;
+    if (!focused) {
+      const html = runsToHtml(block.runs);
+      if (ref.current.innerHTML !== html) ref.current.innerHTML = html;
+      return;
+    }
+    // While focused the browser owns the DOM, but a structural change (Enter,
+    // Backspace merge) rewrote the runs underneath us - repaint and restore.
+    if (pendingCaret.current === null) return;
+    const at = pendingCaret.current;
+    pendingCaret.current = null;
     const html = runsToHtml(block.runs);
     if (ref.current.innerHTML !== html) ref.current.innerHTML = html;
+    setCaretOffset(ref.current, at);
   }, [block.runs, focused]);
 
   const heading = props.style.startsWith("Heading");
   const Tag = (heading ? (`h${Math.min(6, Number(props.style.replace("Heading", "")) || 1)}`) : "div") as "div";
   const listMarker = props.list ? (props.list.kind === "number" ? `${props.list.start}.` : ["•", "◦", "▪"][props.list.level % 3]) : null;
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const element = event.currentTarget;
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") return; // page break, handled globally
+    const mod = event.ctrlKey || event.metaKey;
+    const offset = caretOffset(element);
+    const range = selectedRange(element);
+    const plain = domToRuns(element);
+    const from = range ? range[0] : offset;
+    const to = range ? range[1] : offset;
+
+    switch (event.key) {
+      case "Enter": {
+        if (event.shiftKey) {
+          // Shift+Enter is a hard line break inside the same paragraph.
+          event.preventDefault();
+          const [left, right] = splitAtLineBreak(plain, to);
+          const tail = replaceRange(right, 0, 0, "\n");
+          onStructure({ kind: "replace", index, block: { ...block, runs: insertText(joinRuns(left, tail), from, "") } });
+          return;
+        }
+        event.preventDefault();
+        onStructure({ kind: "split", index, offset: from, to });
+        return;
+      }
+      case "Backspace": {
+        if (from !== 0 || to !== 0) {
+          if (mod) {
+            event.preventDefault();
+            const [start] = wordRangeAt(plain, from, "backward");
+            onStructure({ kind: "replace", index, block: { ...block, runs: replaceRange(plain, start, from, "") } });
+            pendingCaret.current = start;
+            return;
+          }
+          if (range) {
+            event.preventDefault();
+            onStructure({ kind: "replace", index, block: { ...block, runs: replaceRange(plain, from, to, "") } });
+            pendingCaret.current = from;
+            return;
+          }
+          return; // normal character delete, the browser handles it
+        }
+        event.preventDefault();
+        onStructure({ kind: "mergeBackward", index });
+        return;
+      }
+      case "Delete": {
+        const text = runsText(plain);
+        if (to < text.length) {
+          if (mod) {
+            event.preventDefault();
+            const [, end] = wordRangeAt(plain, to, "forward");
+            onStructure({ kind: "replace", index, block: { ...block, runs: replaceRange(plain, from, end, "") } });
+            return;
+          }
+          if (range) {
+            event.preventDefault();
+            onStructure({ kind: "replace", index, block: { ...block, runs: replaceRange(plain, from, to, "") } });
+            pendingCaret.current = from;
+            return;
+          }
+          return;
+        }
+        event.preventDefault();
+        onStructure({ kind: "mergeForward", index });
+        return;
+      }
+      case "Tab": {
+        event.preventDefault();
+        onStructure({ kind: event.shiftKey ? "outdent" : "indent", index });
+        return;
+      }
+      case "ArrowUp":
+        if (caretOnFirstLine(element)) {
+          event.preventDefault();
+          onStructure({ kind: "moveCaret", index, delta: -1, atLine: "start" });
+        }
+        return;
+      case "ArrowDown":
+        if (caretOnLastLine(element)) {
+          event.preventDefault();
+          onStructure({ kind: "moveCaret", index, delta: 1, atLine: "end" });
+        }
+        return;
+      case "Home":
+        if (!mod) {
+          event.preventDefault();
+          setCaretOffset(element, 0);
+        }
+        return;
+      case "End": {
+        if (!mod) {
+          event.preventDefault();
+          setCaretOffset(element, runsText(plain).length);
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  };
 
   return (
     <div className="para-row" style={{ marginLeft: props.list ? props.list.level * 24 : 0 }}>
@@ -989,6 +1241,7 @@ function ParagraphView({
         contentEditable
         suppressContentEditableWarning
         spellCheck
+        onKeyDown={handleKeyDown}
         onFocus={() => {
           setFocused(true);
           onFocus();
@@ -1162,85 +1415,16 @@ function ImageOptions({
 // DOM helpers
 // ---------------------------------------------------------------------------
 
-function emptyRun(text = ""): Run {
-  return { text, bold: false, italic: false, underline: false, strike: false, color: null, highlight: null, font: null, sizePt: null, link: null, comment: null, superscript: false, subscript: false };
-}
+const emptyRun = emptyWriterRun;
 
 function effectiveFontSize(block: Extract<Block, { type: "paragraph" }>): number | null {
   return block.runs.find((run) => run.sizePt)?.sizePt ?? null;
-}
-
-export function runsToHtml(runs: Run[]): string {
-  return runs
-    .map((run) => {
-      const text = escapeHtml(run.text).replace(/\t/g, "&emsp;");
-      if (text === "") return "";
-      let html = text;
-      if (run.bold) html = `<strong>${html}</strong>`;
-      if (run.italic) html = `<em>${html}</em>`;
-      if (run.underline) html = `<u>${html}</u>`;
-      if (run.strike) html = `<s>${html}</s>`;
-      if (run.superscript) html = `<sup>${html}</sup>`;
-      if (run.subscript) html = `<sub>${html}</sub>`;
-      const styles: string[] = [];
-      if (run.color) styles.push(`color:${run.color}`);
-      if (run.highlight) styles.push(`background-color:${run.highlight}`);
-      if (run.sizePt) styles.push(`font-size:${run.sizePt}pt`);
-      if (run.font) styles.push(`font-family:'${run.font.replace(/'/g, "")}'`);
-      if (styles.length) html = `<span style="${styles.join(";")}">${html}</span>`;
-      if (run.link) html = `<a href="${escapeHtml(run.link)}" target="_blank" rel="noreferrer">${html}</a>`;
-      return html;
-    })
-    .join("");
-}
-
-export function domToRuns(element: HTMLElement): Run[] {
-  const runs: Run[] = [];
-  const walk = (node: Node, inherited: Partial<Run>) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = node.textContent ?? "";
-      if (text) runs.push({ ...emptyRun(text), ...inherited });
-      return;
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    const el = node as HTMLElement;
-    const tag = el.tagName.toLowerCase();
-    const next: Partial<Run> = { ...inherited };
-    if (tag === "strong" || tag === "b") next.bold = true;
-    if (tag === "em" || tag === "i") next.italic = true;
-    if (tag === "u") next.underline = true;
-    if (tag === "s" || tag === "strike" || tag === "del") next.strike = true;
-    if (tag === "sup") next.superscript = true;
-    if (tag === "sub") next.subscript = true;
-    if (tag === "a") next.link = el.getAttribute("href");
-    if (el.style?.color) next.color = el.style.color;
-    if (el.style?.backgroundColor) next.highlight = el.style.backgroundColor;
-    if (el.style?.fontSize) {
-      const size = Number.parseFloat(el.style.fontSize);
-      if (Number.isFinite(size)) next.sizePt = Math.round(size * 0.75 * 10) / 10;
-    }
-    if (tag === "br") {
-      runs.push({ ...emptyRun("\n"), ...next });
-      return;
-    }
-    el.childNodes.forEach((child) => walk(child, next));
-  };
-  element.childNodes.forEach((child) => walk(child, {}));
-  if (runs.length === 0) return [emptyRun()];
-  return runs;
-}
-
-function wrapCellRuns(runs: Run[]): Block {
-  return { type: "paragraph", props: defaultParaProps(), runs };
 }
 
 function applyVisualStyle(element: HTMLElement, property: string, value: string) {
   element.style.setProperty(property, value);
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 function mimeFromName(name: string): string {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";

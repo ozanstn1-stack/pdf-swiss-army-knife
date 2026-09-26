@@ -1,10 +1,12 @@
 //! XLSX export (written directly as OOXML) and spreadsheet import.
 //!
-//! Export covers values, formulas, styling, number formats, column widths,
-//! row heights, merges, freeze panes and gridline settings. Import uses the
-//! well-tested `calamine` parser so XLSX, XLS and ODS files from Excel and
-//! LibreOffice open reliably; formatting is imported with limited support and
-//! that limitation is reported to the user.
+//! Export covers values, formulas, styling, number formats, column widths, row
+//! heights, merges, freeze panes, gridline settings, defined names, autofilters,
+//! tab colours, hyperlinks, cell comments, data validation, conditional
+//! formatting, sheet protection and print layout. Import uses the well-tested
+//! `calamine` parser so XLSX, XLS and ODS files from Excel and LibreOffice open
+//! reliably; formatting is imported with limited support and that limitation is
+//! reported to the user.
 
 use crate::error::{OfficeError, OfficeResult};
 use crate::io::{normalize_hex, write_atomic};
@@ -239,6 +241,14 @@ impl StyleTable {
         }
         writer.raw("</cellXfs>");
         writer.raw("<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>");
+        // One differential format backs every conditional-formatting rule, so
+        // the highlight colour a rule shows in the editor is the colour a
+        // spreadsheet shows after the round trip.
+        writer.raw(&format!(
+            "<dxfs count=\"1\"><dxf><font><color rgb=\"{}\"/></font><fill><patternFill><bgColor rgb=\"{}\"/></patternFill></fill></dxf></dxfs>",
+            argb_of(CONDITIONAL_FILL),
+            argb_of(CONDITIONAL_FILL)
+        ));
         writer.raw("</styleSheet>");
         writer.finish()
     }
@@ -253,12 +263,31 @@ fn column_width_units(pixels: f64) -> f64 {
     ((pixels - 5.0) / 7.0).max(2.0)
 }
 
-fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, shared_index: &mut BTreeMap<String, usize>) -> String {
+/// One worksheet plus the companion parts that hang off it.
+///
+/// XLSX keeps a worksheet's relationships in a sibling `.rels` file, so the
+/// hyperlink targets, the comment part and its VML shapes cannot live in the
+/// worksheet XML itself.
+struct SheetPart {
+    xml: String,
+    rels: Vec<(String, String, String)>,
+    comments: Vec<(String, String)>,
+}
+
+fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, shared_index: &mut BTreeMap<String, usize>) -> SheetPart {
     let mut writer = XmlWriter::new();
     writer.declaration();
     writer.raw(
         "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
     );
+    // CT_Worksheet is a strict sequence: sheetPr, dimension, sheetViews,
+    // sheetFormatPr, cols, sheetData, sheetProtection, autoFilter, mergeCells,
+    // conditionalFormatting, dataValidations, hyperlinks, printOptions,
+    // pageMargins, pageSetup, headerFooter, legacyDrawing. Emitting them out of
+    // order produces a file Excel refuses to open, so the order is not cosmetic.
+    if let Some(color) = sheet.tab_color.as_ref().filter(|value| !value.is_empty()) {
+        writer.raw(&format!("<sheetPr><tabColor rgb=\"{}\"/></sheetPr>", argb_of(color)));
+    }
 
     let mut max_row = 0u32;
     let mut max_col = 0u32;
@@ -306,9 +335,19 @@ fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, s
 
     writer.raw("<sheetData>");
     let mut rows: BTreeMap<u32, Vec<(u32, &Cell)>> = BTreeMap::new();
+    let mut hyperlinks: Vec<(String, String)> = Vec::new();
+    let mut comments: Vec<(String, String)> = Vec::new();
     for (address, cell) in &sheet.cells {
         if cell.is_empty() {
             continue;
+        }
+        if let (Some(target), Some((row, column))) = (cell.link.as_ref(), crate::address::parse(address)) {
+            hyperlinks.push((crate::address::format(row, column), target.clone()));
+        }
+        if let (Some(text), Some((row, column))) = (cell.comment.as_ref(), crate::address::parse(address)) {
+            if !text.trim().is_empty() {
+                comments.push((crate::address::format(row, column), text.clone()));
+            }
         }
         if let Some((row, column)) = crate::address::parse(address) {
             rows.entry(row).or_default().push((column, cell));
@@ -362,7 +401,7 @@ fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, s
                 _ => {}
             }
             let formula_xml = formula.map(|formula| format!("<f>{}</f>", escape_text(&formula))).unwrap_or_default();
-            if formula_xml.is_empty() && value_xml.is_empty() && cell.style == CellStyle::default() {
+            if formula_xml.is_empty() && value_xml.is_empty() && cell.style == CellStyle::default() && cell.link.is_none() && cell.comment.is_none() {
                 continue;
             }
             writer.raw(&format!("<c r=\"{address}\"{style_attr}{type_attr}>{formula_xml}{value_xml}</c>"));
@@ -370,6 +409,20 @@ fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, s
         writer.raw("</row>");
     }
     writer.raw("</sheetData>");
+
+    // CT_Worksheet order from here on: sheetProtection, autoFilter,
+    // mergeCells, conditionalFormatting, dataValidations, hyperlinks,
+    // printOptions, pageMargins, pageSetup, headerFooter, legacyDrawing.
+    if !sheet.sheet_protection.is_empty() {
+        writer.raw(&format!("<sheetProtection password=\"{}\"/>", escape_attr(&sheet.sheet_protection)));
+    }
+
+    // AutoFilter: the active filter range, which is what the toolbar toggles.
+    if let Some(filter) = &sheet.filter {
+        if !filter.range.is_empty() {
+            writer.raw(&format!("<autoFilter ref=\"{}\"/>", escape_attr(&filter.range)));
+        }
+    }
 
     if !sheet.merges.is_empty() {
         writer.raw(&format!("<mergeCells count=\"{}\">", sheet.merges.len()));
@@ -379,32 +432,204 @@ fn sheet_xml(sheet: &Sheet, styles: &mut StyleTable, shared: &mut Vec<String>, s
         writer.raw("</mergeCells>");
     }
 
-    // Data validation (list/number) is written; conditional formatting is kept
-    // in the native format and reported as an XLSX limitation.
-    if !sheet.validations.is_empty() {
-        writer.raw(&format!("<dataValidations count=\"{}\">", sheet.validations.len()));
-        for validation in &sheet.validations {
-            let (kind, formula1) = match validation.kind.as_str() {
-                "list" => ("list", validation.values.join(",")),
-                "number" => ("decimal", validation.min.map(|value| value.to_string()).unwrap_or_default()),
-                _ => ("none", String::new()),
-            };
-            if kind == "none" {
-                continue;
-            }
-            let formula1 = if kind == "list" { format!("\"{formula1}\"") } else { formula1 };
-            writer.raw(&format!(
-                "<dataValidation type=\"{kind}\" allowBlank=\"1\" showInputMessage=\"1\" showErrorMessage=\"1\" sqref=\"{}\"><formula1>{}</formula1></dataValidation>",
-                escape_attr(&validation.range),
-                escape_text(&formula1)
-            ));
+    // Conditional formatting; each rule points at the shared dxf in styles.xml.
+    for (index, rule) in sheet.conditional.iter().enumerate() {
+        if let Some(xml) = conditional_formatting_xml(rule, index) {
+            writer.raw(&xml);
         }
-        writer.raw("</dataValidations>");
     }
 
-    writer.raw("<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>");
+    // Data validation: list and numeric range, with the optional error message.
+    if !sheet.validations.is_empty() {
+        let mut count = 0;
+        let mut body = String::new();
+        for validation in &sheet.validations {
+            let (kind, formula1, formula2) = match validation.kind.as_str() {
+                "list" => ("list", validation.values.join(","), String::new()),
+                "number" => (
+                    "decimal",
+                    validation.min.map(|value| value.to_string()).unwrap_or_default(),
+                    validation.max.map(|value| value.to_string()).unwrap_or_default(),
+                ),
+                _ => continue,
+            };
+            let quoted = if kind == "list" { format!("\"{formula1}\"") } else { formula1 };
+            let second = if formula2.is_empty() {
+                String::new()
+            } else {
+                format!("<formula2>{}</formula2>", escape_text(&formula2))
+            };
+            let prompt = if validation.message.is_empty() {
+                String::new()
+            } else {
+                format!(" promptTitle=\"Invalid value\" error=\"{}\"", escape_attr(&validation.message))
+            };
+            let blank = if validation.allow_blank { 1 } else { 0 };
+            body.push_str(&format!(
+                "<dataValidation type=\"{kind}\" allowBlank=\"{blank}\" showInputMessage=\"1\" showErrorMessage=\"1\"{prompt} sqref=\"{}\"><formula1>{}</formula1>{second}</dataValidation>",
+                escape_attr(&validation.range),
+                escape_text(&quoted)
+            ));
+            count += 1;
+        }
+        if count > 0 {
+            writer.raw(&format!("<dataValidations count=\"{count}\">{body}</dataValidations>"));
+        }
+    }
+
+    // Hyperlinks: one external relationship per target.
+    let mut rels: Vec<(String, String, String)> = Vec::new();
+    if !hyperlinks.is_empty() {
+        writer.raw(&format!("<hyperlinks count=\"{}\">", hyperlinks.len()));
+        for (address, target) in &hyperlinks {
+            let rid = format!("rId{}", rels.len() + 1);
+            writer.raw(&format!("<hyperlink ref=\"{}\" r:id=\"{rid}\"/>", escape_attr(address)));
+            rels.push((
+                rid,
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink".into(),
+                target.clone(),
+            ));
+        }
+        writer.raw("</hyperlinks>");
+    }
+
+    writer.raw(&print_settings_xml(sheet));
+
+    if !comments.is_empty() {
+        rels.push((
+            "rIdComments".into(),
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments".into(),
+            "../comments1.xml".into(),
+        ));
+        rels.push((
+            "rIdVml".into(),
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing".into(),
+            "../drawings/vmlDrawing1.vml".into(),
+        ));
+        writer.raw("<legacyDrawing r:id=\"rIdVml\"/>");
+    }
+
     writer.raw("</worksheet>");
-    writer.finish()
+    SheetPart {
+        xml: writer.finish(),
+        rels,
+        comments,
+    }
+}
+
+/// Builds a `<conditionalFormatting>` block plus the dxf index it points at.
+///
+/// Returns `None` for rule kinds that have no XLSX equivalent, which the caller
+/// reports through the import/export warnings rather than emitting a broken
+/// package.
+fn conditional_formatting_xml(rule: &CondRule, index: usize) -> Option<String> {
+    let dxf = CONDITIONAL_DXF_ID;
+    // (rule type, operator, formula body). The formula carries the rule
+    // threshold; a rule kind with no XLSX equivalent returns None.
+    let (kind, operator, formula): (&str, &str, Option<String>) = match rule.kind.as_str() {
+        "greater" => ("cellIs", "greaterThan", Some(format!("&gt;{}", escape_text(first_value(rule, "0"))))),
+        "less" => ("cellIs", "lessThan", Some(format!("&lt;{}", escape_text(first_value(rule, "0"))))),
+        "equal" => ("cellIs", "equal", Some(escape_text(first_value(rule, "0")))),
+        "between" => (
+            "cellIs",
+            "between",
+            Some(format!("{}~{}", escape_text(first_value(rule, "0")), escape_text(second_value(rule, "0")))),
+        ),
+        "text" => (
+            "containsText",
+            "containsText",
+            Some(format!(
+                "NOT(ISERROR(SEARCH(&quot;{}&quot;,{})))",
+                escape_text(first_value(rule, "")),
+                anchor_of(&rule.range)
+            )),
+        ),
+        "duplicates" => (
+            "duplicateValues",
+            "duplicateValues",
+            Some(format!("COUNTIF({},{})>1", anchor_of(&rule.range), anchor_of(&rule.range))),
+        ),
+        "top" => (
+            "top10",
+            "greaterThanOrEqual",
+            Some(format!(
+                "{}&gt;=LARGE({},{})",
+                anchor_of(&rule.range),
+                anchor_of(&rule.range),
+                rule.top_n.unwrap_or(10)
+            )),
+        ),
+        "bottom" => (
+            "top10",
+            "lessThanOrEqual",
+            Some(format!(
+                "{}&lt;=SMALL({},{})",
+                anchor_of(&rule.range),
+                anchor_of(&rule.range),
+                rule.top_n.unwrap_or(10)
+            )),
+        ),
+        // A data bar needs a different cfRule shape; it stays in .oswk and the
+        // export reports it instead of emitting something Excel would reject.
+        _ => return None,
+    };
+    let stop = if rule.stop_if_true { " stopIfTrue=\"1\"" } else { "" };
+    let rank = if rule.kind == "bottom" { " bottom=\"1\"" } else { "" };
+    let formulas = formula
+        .map(|body| format!("<formula>{body}</formula>"))
+        .unwrap_or_default();
+    Some(format!(
+        "<conditionalFormatting sqref=\"{}\"><cfRule type=\"{kind}\" dxfId=\"{dxf}\" priority=\"{}\"{stop} operator=\"{operator}\"{rank}>{formulas}</cfRule></conditionalFormatting>",
+        escape_attr(&rule.range),
+        index + 1
+    ))
+}
+
+fn first_value<'a>(rule: &'a CondRule, fallback: &'a str) -> &'a str {
+    rule.values.first().map(String::as_str).unwrap_or(fallback)
+}
+
+fn second_value<'a>(rule: &'a CondRule, fallback: &'a str) -> &'a str {
+    rule.values.get(1).map(String::as_str).unwrap_or(fallback)
+}
+
+/// The top-left cell of a range, used as the relative anchor in rule formulas.
+fn anchor_of(range: &str) -> String {
+    range.split(':').next().unwrap_or(range).to_string()
+}
+
+/// One shared dxf for the whole workbook; every rule reuses it so the styles
+/// part stays small and consistent with what the editor preview shows.
+const CONDITIONAL_DXF_ID: usize = 0;
+
+/// Highlight colour used by the single shared differential format.
+const CONDITIONAL_FILL: &str = "#FFF3C4";
+
+/// Paper size, orientation and print options for a sheet.
+fn print_settings_xml(sheet: &Sheet) -> String {
+    let mut out = String::from("<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>");
+    let landscape = sheet.print.landscape;
+    out.push_str(&format!(
+        "<pageSetup paperSize=\"{}\" orientation=\"{}\" scale=\"{}\" fitToWidth=\"{}\" fitToHeight=\"{}\"/>",
+        sheet.print.paper_size,
+        if landscape { "landscape" } else { "portrait" },
+        sheet.print.scale.clamp(10, 400),
+        sheet.print.fit_to_width,
+        sheet.print.fit_to_height
+    ));
+    out.push_str(&format!(
+        "<printOptions horizontalCentered=\"{}\" gridLines=\"{}\" headings=\"{}\"/>",
+        u8::from(sheet.print.center_horizontally),
+        u8::from(sheet.print.print_gridlines),
+        u8::from(sheet.print.print_headings)
+    ));
+    out.push_str(&format!(
+        "<headerFooter differentFirst=\"{}\" differentOddEven=\"{}\"><oddHeader>&amp;C{}</oddHeader></headerFooter>",
+        u8::from(sheet.print.different_first_page),
+        u8::from(sheet.print.different_odd_even),
+        escape_text(&sheet.print.header)
+    ));
+    out
 }
 
 pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
@@ -412,21 +637,20 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
     if workbook.sheets.iter().any(|sheet| !sheet.charts.is_empty()) {
         warnings.push("Charts are kept in the native .oswk file; XLSX export does not embed them yet.".into());
     }
-    if workbook.sheets.iter().any(|sheet| !sheet.conditional.is_empty()) {
-        warnings.push("Conditional formatting rules are applied in the editor but are not written to XLSX.".into());
-    }
     let mut styles = StyleTable::new();
     let mut shared: Vec<String> = Vec::new();
     let mut shared_index: BTreeMap<String, usize> = BTreeMap::new();
 
-    let mut sheet_parts: Vec<(String, String)> = Vec::new();
+    let mut sheet_parts: Vec<SheetPart> = Vec::new();
+    let mut sheet_names: Vec<String> = Vec::new();
     for (index, sheet) in workbook.sheets.iter().enumerate() {
         let mut name = sheet.name.clone();
         if name.is_empty() {
             name = format!("Sheet{}", index + 1);
         }
         name.truncate(31);
-        sheet_parts.push((name, sheet_xml(sheet, &mut styles, &mut shared, &mut shared_index)));
+        sheet_names.push(name);
+        sheet_parts.push(sheet_xml(sheet, &mut styles, &mut shared, &mut shared_index));
     }
 
     let mut zip = ZipWriter::new();
@@ -459,7 +683,7 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
     let mut workbook_xml = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>",
     );
-    for (index, (name, _)) in sheet_parts.iter().enumerate() {
+    for (index, name) in sheet_names.iter().enumerate() {
         workbook_xml.push_str(&format!(
             "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"rId{}\"/>",
             escape_attr(name),
@@ -467,7 +691,49 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
             index + 1
         ));
     }
-    workbook_xml.push_str("</sheets></workbook>");
+    workbook_xml.push_str("</sheets>");
+    // Defined names: workbook-level ones first, then each sheet's own. Excel
+    // scopes a name with `localSheetId`, which is the sheet's position.
+    let mut defined = String::new();
+    let mut defined_count = 0usize;
+    for entry in &workbook.names {
+        if !entry.is_workbook_scope() {
+            continue;
+        }
+        if let Some(xml) = defined_name_xml(entry, None) {
+            defined.push_str(&xml);
+            defined_count += 1;
+        }
+    }
+    for (index, sheet_name) in sheet_names.iter().enumerate() {
+        for entry in &workbook.names {
+            if entry.is_workbook_scope() || entry.sheet.as_deref() != Some(sheet_name.as_str()) {
+                continue;
+            }
+            if let Some(xml) = defined_name_xml(entry, Some(index)) {
+                defined.push_str(&xml);
+                defined_count += 1;
+            }
+        }
+    }
+    // A sheet's AutoFilter range is itself a defined name in the OOXML spec.
+    for (index, sheet) in workbook.sheets.iter().enumerate() {
+        if let Some(filter) = &sheet.filter {
+            if !filter.range.is_empty() {
+                defined.push_str(&format!(
+                    "<definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"{}\" hidden=\"1\">{}!{}</definedName>",
+                    index,
+                    escape_text(&sheet_names[index]),
+                    escape_text(&filter.range.replace(':', ":"))
+                ));
+                defined_count += 1;
+            }
+        }
+    }
+    if defined_count > 0 {
+        workbook_xml.push_str(&format!("<definedNames>{defined}</definedNames>"));
+    }
+    workbook_xml.push_str("</workbook>");
 
     let mut workbook_rels = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
@@ -478,8 +744,7 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
             index + 1,
             index + 1
         ));
-    }
-    let styles_rid = sheet_parts.len() + 1;
+    }    let styles_rid = sheet_parts.len() + 1;
     let shared_rid = sheet_parts.len() + 2;
     workbook_rels.push_str(&format!(
         "<Relationship Id=\"rId{styles_rid}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"
@@ -505,6 +770,12 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
     );
     let app = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Application>Office Swiss Army Knife</Application></Properties>";
 
+    let with_comments = sheet_parts.iter().any(|part| !part.comments.is_empty());
+    if with_comments {
+        content_types.push_str("<Override PartName=\"/xl/comments1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml\"/>");
+        content_types.push_str("<Default Extension=\"vml\" ContentType=\"application/vnd.openxmlformats-officedocument.vmlDrawing\"/>");
+    }
+
     zip.add_text("[Content_Types].xml", &content_types);
     zip.add_text("_rels/.rels", &root_rels);
     zip.add_text("docProps/core.xml", &core);
@@ -513,10 +784,119 @@ pub fn write_xlsx_package(workbook: &Workbook) -> OfficeResult<SheetWrite> {
     zip.add_text("xl/_rels/workbook.xml.rels", &workbook_rels);
     zip.add_text("xl/styles.xml", &styles.xml());
     zip.add_text("xl/sharedStrings.xml", &shared_xml);
-    for (index, (_, xml)) in sheet_parts.iter().enumerate() {
-        zip.add_text(&format!("xl/worksheets/sheet{}.xml", index + 1), xml);
+    for (index, part) in sheet_parts.iter().enumerate() {
+        zip.add_text(&format!("xl/worksheets/sheet{}.xml", index + 1), &part.xml);
+        if !part.rels.is_empty() {
+            let mut rels = String::from(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+            );
+            for (id, kind, target) in &part.rels {
+                let extra = if kind.ends_with("/hyperlink") { " TargetMode=\"External\"" } else { "" };
+                rels.push_str(&format!(
+                    "<Relationship Id=\"{id}\" Type=\"{kind}\" Target=\"{}\"{extra}/>",
+                    escape_attr(target)
+                ));
+            }
+            rels.push_str("</Relationships>");
+            zip.add_text(&format!("xl/worksheets/_rels/sheet{}.xml.rels", index + 1), &rels);
+        }
+    }
+    if with_comments {
+        // One comments part covering every sheet's notes, which is what Excel
+        // produces for a workbook this size and keeps the package simple.
+        let mut authors = String::from("Office Swiss Army Knife");
+        let mut comments_xml = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors>",
+        );
+        comments_xml.push_str(&format!("<author>{}</author>", escape_text(&authors)));
+        authors.clear();
+        comments_xml.push_str("</authors><commentList>");
+        for part in &sheet_parts {
+            for (address, text) in &part.comments {
+                comments_xml.push_str(&format!(
+                    "<comment ref=\"{address}\" authorId=\"0\"><text><r><rPr><sz val=\"9\"/></rPr><t xml:space=\"preserve\">{text}</t></r></text></comment>",
+                    text = escape_text(text)
+                ));
+            }
+        }
+        comments_xml.push_str("</commentList></comments>");
+        zip.add_text("xl/comments1.xml", &comments_xml);
+        zip.add_text("xl/drawings/vmlDrawing1.vml", &comments_vml(&sheet_parts));
     }
     Ok(SheetWrite { bytes: zip.finish(), warnings })
+}
+
+/// Emits one `<definedName>` element, or `None` when the entry is unusable.
+///
+/// A name has to start with a letter or underscore and may not look like a
+/// cell reference, otherwise Excel refuses to open the file - so a bad entry is
+/// dropped rather than written out.
+fn defined_name_xml(entry: &NamedRange, local_sheet_id: Option<usize>) -> Option<String> {
+    let name = entry.name.trim();
+    if name.is_empty() || entry.definition.trim().is_empty() {
+        return None;
+    }
+    if !name.chars().next()?.is_alphabetic() && !name.starts_with('_') {
+        return None;
+    }
+    if name.chars().any(|character| !(character.is_alphanumeric() || character == '_' || character == '.')) {
+        return None;
+    }
+    if crate::address::parse(name).is_some() {
+        return None;
+    }
+    let scope = match local_sheet_id {
+        Some(index) => format!(" localSheetId=\"{index}\""),
+        None => String::new(),
+    };
+    let mut definition = entry.definition.trim().to_string();
+    if !definition.starts_with('=') {
+        definition = format!("={definition}");
+    }
+    Some(format!(
+        "<definedName name=\"{}\"{}>{}</definedName>",
+        escape_attr(name),
+        scope,
+        escape_text(&definition)
+    ))
+}
+
+/// The VML drawing Excel needs in order to show a comment marker on a cell.
+///
+/// OOXML stores comment *text* in `comments1.xml` but the little red triangle
+/// and the hover box are legacy VML shapes, so a comments part without this
+/// file opens with invisible notes.
+fn comments_vml(parts: &[SheetPart]) -> String {
+    let mut vml = String::from(
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\">",
+    );
+    vml.push_str("<o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"1\"/></o:shapelayout>");
+    vml.push_str(
+        "<v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>",
+    );
+    let mut shape_id = 1025u32;
+    for part in parts {
+        for (address, _) in &part.comments {
+            // Column and row are zero based in the ClientData block.
+            let (row, column) = crate::address::parse(address).unwrap_or((0, 0));
+            vml.push_str(&format!(
+                "<v:shape id=\"_x0000_s{shape_id}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:1;visibility:hidden\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"/></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:AutoFill>False</x:AutoFill><x:Row>{row}</x:Row><x:Column>{column}</x:Column></x:ClientData></v:shape>"
+            ));
+            shape_id += 1;
+        }
+    }
+    vml.push_str("</xml>");
+    vml
+}
+
+/// `#RRGGBB` (or `RRGGBB`) to the `AARRGGBB` form XLSX attributes use.
+fn argb_of(color: &str) -> String {
+    let hex: String = color.chars().filter(|character| character.is_ascii_hexdigit()).collect();
+    match hex.len() {
+        6 => format!("FF{hex}"),
+        8 => hex,
+        _ => "FF000000".into(),
+    }
 }
 
 pub fn write_xlsx(workbook: &Workbook) -> OfficeResult<Vec<u8>> {

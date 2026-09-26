@@ -827,3 +827,8 @@ body {
   .writer-page { box-shadow: none; width: auto !important; min-height: 0 !important; padding: 0 !important; }
   .writer-page-break { page-break-after: always; border: none; }
 }
+/* Version history dialog and the unsaved-changes prompt. */
+.version-list { display: flex; flex-direction: column; gap: 4px; max-height: 340px; overflow-y: auto; }
+.version-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.version-row .small { font-size: 12px; }
+.office-tab-actions .tool-btn:disabled { opacity: 0.45; cursor: default; }
