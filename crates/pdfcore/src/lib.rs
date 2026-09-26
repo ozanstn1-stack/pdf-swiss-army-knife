@@ -38,8 +38,10 @@ pub mod organize;
 pub mod pagelayout;
 pub mod pages;
 pub mod progress;
+pub mod redact;
 pub mod render;
 pub mod security;
+pub mod textbox;
 pub mod textimg;
 pub mod watermark;
 

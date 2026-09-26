@@ -37,6 +37,15 @@ pub fn ensure_available() -> PdfResult<()> {
     pdfium().map(|_| ())
 }
 
+/// The cached pdfium instance, for modules that need more than page rendering.
+///
+/// Exposed so text geometry, comparison and accessibility checks can load a
+/// document once and work through every page, instead of re-parsing the file
+/// for each page the way the per-page helpers do.
+pub fn pdfium_instance() -> PdfResult<&'static Pdfium> {
+    pdfium()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOptions {
     pub dpi: f32,
